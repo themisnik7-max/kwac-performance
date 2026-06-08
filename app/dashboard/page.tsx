@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase } from '@/lib/supabase'
 
 export default function Dashboard() {
   const [user, setUser] = useState(null)
@@ -31,7 +31,7 @@ export default function Dashboard() {
         <div style={{background:'#fff',borderRadius:16,padding:32,textAlign:'center',border:'1px solid #F0F0F0'}}>
           <div style={{fontSize:48,marginBottom:16}}>🚀</div>
           <div style={{fontSize:20,fontWeight:600,marginBottom:8}}>KWAC Performance OS Online!</div>
-          <div style={{fontSize:14,color:'#999'}}>Το πλήρες dashboard έρχεται σύντομα.</div>
+          <div style={{fontSize:14,color:'#999'}}>Συνδεθήκατε επιτυχώς.</div>
         </div>
       </div>
     </div>
