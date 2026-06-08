@@ -1,22 +1,20 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
-import { useRouter } from 'next/navigation'
+import { supabase } from '../lib/supabase'
 
 export default function Dashboard() {
-  const [user, setUser] = useState<any>(null)
-  const router = useRouter()
+  const [user, setUser] = useState(null)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) { router.push('/login'); return }
+      if (!data.user) { window.location.href = '/login'; return }
       setUser(data.user)
     })
   }, [])
 
   async function logout() {
     await supabase.auth.signOut()
-    router.push('/login')
+    window.location.href = '/login'
   }
 
   if (!user) return <div style={{padding:40,textAlign:'center'}}>Φόρτωση...</div>
@@ -33,7 +31,7 @@ export default function Dashboard() {
         <div style={{background:'#fff',borderRadius:16,padding:32,textAlign:'center',border:'1px solid #F0F0F0'}}>
           <div style={{fontSize:48,marginBottom:16}}>🚀</div>
           <div style={{fontSize:20,fontWeight:600,marginBottom:8}}>KWAC Performance OS Online!</div>
-          <div style={{fontSize:14,color:'#999'}}>Συνδεθήκατε ως: {user.email}</div>
+          <div style={{fontSize:14,color:'#999'}}>Το πλήρες dashboard έρχεται σύντομα.</div>
         </div>
       </div>
     </div>
