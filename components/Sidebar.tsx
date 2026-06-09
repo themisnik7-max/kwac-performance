@@ -1,35 +1,42 @@
 'use client'
-import { usePathname } from 'next/navigation'
-const C = { red:'#CC2229' }
+import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase'
+
 const NAV = [
-  {icon:'⊞',label:'Dashboard',href:'/dashboard'},
-  {icon:'✏',label:'Καταχώρηση',href:'/submit'},
-  {icon:'📍',label:'Προφίλ',href:'/profile'},
-  {icon:'📋',label:'Ακίνητα',href:'/properties/new'},
-  {icon:'📣',label:'Πίνακας',href:'/board'},
-  {icon:'💎',label:'Εκτίμηση',href:'/valuation'},
-  {icon:'🧠',label:'Analytics',href:'/intelligence'},
-  {icon:'◎',label:'AI Coach',href:'/chat'},
+  { href: '/dashboard', icon: '▦', label: 'Dashboard', key: 'dashboard' },
+  { href: '/submit', icon: '✎', label: 'Μετρησιμότητα', key: 'submit' },
+  { href: '/profile', icon: '⊙', label: 'Ακίνητα & Χάρτης', key: 'profile' },
+  { href: '/sprint', icon: '⚡', label: 'Sprint Calls', key: 'sprint' },
+  { href: '/rooms', icon: '◫', label: 'Αίθουσες', key: 'rooms' },
+  { href: '/board', icon: '◈', label: 'Πίνακας', key: 'board' },
+  { href: '/valuation', icon: '◎', label: 'Εκτίμηση', key: 'valuation' },
+  { href: '/intelligence', icon: '◉', label: 'Intelligence', key: 'intelligence', ceoOnly: true },
 ]
-export default function Sidebar({isCEO,onCEOToggle}){
-  const path=usePathname()
+
+export default function Sidebar({ active, role }: { active: string, role?: string }) {
+  const router = useRouter()
+  const supabase = createClient()
+  async function logout() {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
+  const isCeo = role === 'ceo' || role === 'admin'
   return (
-    <div style={{width:64,background:'#111',display:'flex',flexDirection:'column',alignItems:'center',paddingTop:16,paddingBottom:16,gap:2,position:'fixed',top:0,left:0,height:'100vh',zIndex:100,overflowY:'auto'}}>
-      <div style={{color:'#fff',fontWeight:800,fontSize:12,marginBottom:14,letterSpacing:1,textAlign:'center',lineHeight:1.2,flexShrink:0}}>KW<br/><span style={{color:C.red}}>AC</span></div>
-      {NAV.map((it,i)=>(
-        <a key={i} href={it.href} style={{width:48,height:46,borderRadius:10,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,flexShrink:0,background:path===it.href||path?.startsWith(it.href.split('/')[1]==='properties'?'/properties':it.href)?'rgba(255,255,255,.12)':'transparent',color:path===it.href?'#fff':'rgba(255,255,255,.35)',fontSize:14,textDecoration:'none',transition:'all .15s'}}>
-          <span>{it.icon}</span><span style={{fontSize:7,fontWeight:600}}>{it.label}</span>
-        </a>
-      ))}
-      <div style={{flex:1}}/>
-      {onCEOToggle&&(
-        <button onClick={onCEOToggle} style={{width:44,height:44,borderRadius:10,flexShrink:0,border:isCEO?'1px solid '+C.red:'1px solid rgba(255,255,255,.1)',cursor:'pointer',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,background:isCEO?C.red+'33':'transparent',color:isCEO?C.red:'rgba(255,255,255,.35)',fontSize:13}}>
-          <span>👔</span><span style={{fontSize:7,fontWeight:600}}>CEO</span>
-        </button>
-      )}
-      <a href="/login" style={{width:44,height:44,borderRadius:10,flexShrink:0,border:'1px solid rgba(255,255,255,.08)',marginTop:4,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:2,background:'transparent',color:'rgba(255,255,255,.3)',fontSize:13,textDecoration:'none'}}>
-        <span>🚪</span><span style={{fontSize:7,fontWeight:600}}>Έξοδος</span>
-      </a>
-    </div>
+    <aside style={{width:220,background:'#1a1a1a',minHeight:'100vh',display:'flex',flexDirection:'column',padding:'1.5rem 0',flexShrink:0}}>
+      <div style={{padding:'0 1.25rem 1.5rem',borderBottom:'0.5px solid #333'}}>
+        <div style={{color:'#CC2229',fontWeight:600,fontSize:16,letterSpacing:'.05em'}}>KWAC</div>
+        <div style={{color:'#666',fontSize:11,marginTop:2}}>Performance OS</div>
+      </div>
+      <nav style={{flex:1,padding:'1rem 0'}}>
+        {NAV.filter(n => !n.ceoOnly || isCeo).map(n => (
+          <a key={n.key} href={n.href} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 1.25rem',fontSize:13,color:active===n.key?'#fff':'#888',background:active===n.key?'#2a2a2a':'none',borderLeft:active===n.key?'2px solid #CC2229':'2px solid transparent',textDecoration:'none',transition:'all .15s',cursor:'pointer'}}>
+            <span style={{fontSize:14}}>{n.icon}</span>{n.label}
+          </a>
+        ))}
+      </nav>
+      <div style={{padding:'0 1.25rem',borderTop:'0.5px solid #333',paddingTop:'1rem'}}>
+        <button onClick={logout} style={{width:'100%',padding:'8px',background:'none',border:'0.5px solid #333',borderRadius:8,color:'#666',fontSize:12,cursor:'pointer'}}>Αποσύνδεση</button>
+      </div>
+    </aside>
   )
 }
