@@ -3,23 +3,24 @@ import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import Link from 'next/link'
+import OpenHouseModal from '@/components/OpenHouseModal'
 
 const C = {red:'#CC2229',redLight:'#FDF2F2',dark:'#1A1A1A',muted:'#6B7280',border:'#EBEBEB',subtle:'#F7F7F7',white:'#FFFFFF',green:'#16A34A',greenLight:'#F0FDF4',amber:'#D97706',blue:'#2563EB'}
 
 const ALL_PROPS = [
-  {id:'p1',address:'Λεωφ. Βουλιαγμένης 142, Γλυφάδα',area:'Γλυφάδα',deal_type:'sale',status:'sold',sqm:95,floor:3,year_built:1998,condition:'good',price_asking:285000,price_final:270000,listed_at:'2024-09-01',sold_at:'2024-11-15',lat:37.8638,lng:23.7536},
-  {id:'p2',address:'Κηφισίας 210, Χαλάνδρι',area:'Χαλάνδρι',deal_type:'sale',status:'sold',sqm:78,floor:2,year_built:2005,condition:'excellent',price_asking:230000,price_final:225000,listed_at:'2024-10-01',sold_at:'2025-01-20',lat:38.0186,lng:23.8001},
-  {id:'p3',address:'Πανεπιστημίου 45, Κέντρο',area:'Κέντρο',deal_type:'rental',status:'rented',sqm:120,floor:4,year_built:1980,condition:'good',price_asking:2200,price_final:2000,listed_at:'2024-11-01',sold_at:'2024-12-01',lat:37.9755,lng:23.7348},
-  {id:'p4',address:'Αχαρνών 88, Κυψέλη',area:'Κυψέλη',deal_type:'sale',status:'active',sqm:65,floor:1,year_built:1975,condition:'needs_renovation',price_asking:140000,price_final:null,listed_at:'2025-01-15',sold_at:null,lat:37.9952,lng:23.7391},
-  {id:'p5',address:'Φιλελλήνων 12, Γλυφάδα',area:'Γλυφάδα',deal_type:'rental',status:'rented',sqm:85,floor:2,year_built:2010,condition:'excellent',price_asking:1400,price_final:1350,listed_at:'2024-12-01',sold_at:'2025-01-05',lat:37.8700,lng:23.7520},
-  {id:'p6',address:'Ερμού 33, Κολωνάκι',area:'Κολωνάκι',deal_type:'sale',status:'sold',sqm:110,floor:5,year_built:2001,condition:'excellent',price_asking:450000,price_final:430000,listed_at:'2024-07-01',sold_at:'2024-10-20',lat:37.9795,lng:23.7378},
-  {id:'p7',address:'Αγίου Δημητρίου 55, Άγιος Δημήτριος',area:'Άγιος Δημήτριος',deal_type:'sale',status:'active',sqm:92,floor:3,year_built:2008,condition:'good',price_asking:195000,price_final:null,listed_at:'2025-02-01',sold_at:null,lat:37.9302,lng:23.7356},
-  {id:'p8',address:'Θησέως 18, Καλλιθέα',area:'Καλλιθέα',deal_type:'rental',status:'active',sqm:58,floor:1,year_built:1990,condition:'fair',price_asking:680,price_final:null,listed_at:'2025-03-01',sold_at:null,lat:37.9559,lng:23.7014},
+  {id:'p1',address:'Λεωφ. Βουλιαγμένης 142, Γλυφάδα',area:'Γλυφάδα',deal_type:'sale',status:'sold',property_type:'Διαμέρισμα',sqm:95,floor:3,year_built:1998,condition:'good',price_asking:285000,price_final:270000,ilist_code:'1554776',listed_at:'2024-09-01',sold_at:'2024-11-15',lat:37.8638,lng:23.7536},
+  {id:'p2',address:'Κηφισίας 210, Χαλάνδρι',area:'Χαλάνδρι',deal_type:'sale',status:'sold',property_type:'Διαμέρισμα',sqm:78,floor:2,year_built:2005,condition:'excellent',price_asking:230000,price_final:225000,ilist_code:'1554800',listed_at:'2024-10-01',sold_at:'2025-01-20',lat:38.0186,lng:23.8001},
+  {id:'p3',address:'Πανεπιστημίου 45, Κέντρο',area:'Κέντρο',deal_type:'rental',status:'rented',property_type:'Γραφείο',sqm:120,floor:4,year_built:1980,condition:'good',price_asking:2200,price_final:2000,ilist_code:'1554810',listed_at:'2024-11-01',sold_at:'2024-12-01',lat:37.9755,lng:23.7348},
+  {id:'p4',address:'Αχαρνών 88, Κυψέλη',area:'Κυψέλη',deal_type:'sale',status:'active',property_type:'Διαμέρισμα',sqm:65,floor:1,year_built:1975,condition:'needs_renovation',price_asking:140000,price_final:null,ilist_code:'1554820',listed_at:'2025-01-15',sold_at:null,lat:37.9952,lng:23.7391},
+  {id:'p5',address:'Φιλελλήνων 12, Γλυφάδα',area:'Γλυφάδα',deal_type:'rental',status:'rented',property_type:'Διαμέρισμα',sqm:85,floor:2,year_built:2010,condition:'excellent',price_asking:1400,price_final:1350,ilist_code:'1554830',listed_at:'2024-12-01',sold_at:'2025-01-05',lat:37.8700,lng:23.7520},
+  {id:'p6',address:'Ερμού 33, Κολωνάκι',area:'Κολωνάκι',deal_type:'sale',status:'sold',property_type:'Μεζονέτα',sqm:110,floor:5,year_built:2001,condition:'excellent',price_asking:450000,price_final:430000,ilist_code:'1554840',listed_at:'2024-07-01',sold_at:'2024-10-20',lat:37.9795,lng:23.7378},
+  {id:'p7',address:'Αγίου Δημητρίου 55, Άγιος Δημήτριος',area:'Άγιος Δημήτριος',deal_type:'sale',status:'active',property_type:'Διαμέρισμα',sqm:92,floor:3,year_built:2008,condition:'good',price_asking:195000,price_final:null,ilist_code:'1554850',listed_at:'2025-02-01',sold_at:null,lat:37.9302,lng:23.7356},
+  {id:'p8',address:'Θησέως 18, Καλλιθέα',area:'Καλλιθέα',deal_type:'rental',status:'active',property_type:'Διαμέρισμα',sqm:58,floor:1,year_built:1990,condition:'fair',price_asking:680,price_final:null,ilist_code:'1554860',listed_at:'2025-03-01',sold_at:null,lat:37.9559,lng:23.7014},
 ]
-const COND = {excellent:'Άριστη',good:'Καλή',fair:'Μέτρια',needs_renovation:'Ανακαίνιση'}
-const ST_COLOR = {sold:C.green,rented:C.blue,active:C.amber}
-const ST_LABEL = {sold:'Πωλήθηκε',rented:'Ενοικιάστηκε',active:'Ενεργό'}
-const MAP_FILTERS = [
+const COND={excellent:'Άριστη',good:'Καλή',fair:'Μέτρια',needs_renovation:'Ανακαίνιση'}
+const ST_COLOR={sold:C.green,rented:C.blue,active:C.amber}
+const ST_LABEL={sold:'Πωλήθηκε',rented:'Ενοικιάστηκε',active:'Ενεργό'}
+const MAP_FILTERS=[
   {id:'all',label:'Όλα',fn:()=>true},
   {id:'sale_done',label:'Πωλήσεις',fn:p=>p.deal_type==='sale'&&p.status==='sold'},
   {id:'rental_done',label:'Ενοικιάσεις',fn:p=>p.deal_type==='rental'&&p.status==='rented'},
@@ -33,6 +34,7 @@ export default function ProfilePage(){
   const [mapFilter,setMapFilter]=useState('all')
   const [searchInput,setSearchInput]=useState('')
   const [search,setSearch]=useState('')
+  const [ohProp,setOhProp]=useState(null) // property για το OpenHouse modal
   const mapRef=useRef(null)
   const mapInst=useRef(null)
   const markersRef=useRef([])
@@ -110,6 +112,10 @@ export default function ProfilePage(){
   return (
     <div style={{display:'flex',minHeight:'100vh',background:'#F4F4F4',fontFamily:"-apple-system,BlinkMacSystemFont,'Inter',sans-serif",color:C.dark}}>
       <Sidebar/>
+
+      {/* OpenHouse Modal */}
+      {ohProp&&<OpenHouseModal property={ohProp} onClose={()=>setOhProp(null)} onSaved={()=>setOhProp(null)}/>}
+
       <div style={{marginLeft:64,flex:1,padding:'28px 32px',overflowY:'auto'}}>
 
         {/* Hero */}
@@ -145,7 +151,7 @@ export default function ProfilePage(){
           <form onSubmit={handleSearch} style={{display:'flex',gap:8,flex:1,minWidth:260}}>
             <input value={searchInput} onChange={e=>setSearchInput(e.target.value)}
               placeholder="🔍 Αναζήτηση περιοχής ή διεύθυνσης..."
-              style={{flex:1,padding:'10px 14px',borderRadius:10,border:'1px solid '+C.border,fontSize:13,background:C.white,outline:'none',boxShadow:'0 1px 4px rgba(0,0,0,.04)'}}/>
+              style={{flex:1,padding:'10px 14px',borderRadius:10,border:'1px solid '+C.border,fontSize:13,background:C.white,outline:'none'}}/>
             <button type="submit" style={{background:C.dark,color:'#fff',border:'none',borderRadius:10,padding:'10px 18px',fontSize:13,fontWeight:600,cursor:'pointer',whiteSpace:'nowrap'}}>Αναζήτηση</button>
             {search&&<button type="button" onClick={()=>{setSearch('');setSearchInput('')}} style={{background:C.subtle,border:'1px solid '+C.border,borderRadius:10,padding:'10px 12px',fontSize:12,cursor:'pointer',color:C.muted}}>✕</button>}
           </form>
@@ -185,9 +191,15 @@ export default function ProfilePage(){
                     <div style={{fontSize:12,fontWeight:600,color:C.dark,flex:1,paddingRight:8,lineHeight:1.4}}>{p.address}</div>
                     <span style={{fontSize:10,fontWeight:700,color:ST_COLOR[p.status],background:ST_COLOR[p.status]+'18',padding:'2px 7px',borderRadius:99,flexShrink:0,whiteSpace:'nowrap'}}>{ST_LABEL[p.status]}</span>
                   </div>
-                  <div style={{display:'flex',gap:8,fontSize:11,color:C.muted}}>
+                  <div style={{display:'flex',gap:8,fontSize:11,color:C.muted,alignItems:'center'}}>
                     <span>{p.sqm}τ.μ.</span><span>·</span><span>{p.floor}ος</span><span>·</span>
                     <span style={{fontWeight:700,color:C.dark}}>€{(p.price_final||p.price_asking||0).toLocaleString()}</span>
+                    {p.status==='active'&&(
+                      <button onClick={e=>{e.stopPropagation();setOhProp(p)}}
+                        style={{marginLeft:'auto',background:C.amber,color:'#fff',border:'none',borderRadius:6,padding:'3px 8px',fontSize:10,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>
+                        🏠 Open House
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
@@ -201,10 +213,16 @@ export default function ProfilePage(){
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
               <div>
                 <h2 style={{fontSize:16,fontWeight:700,margin:'0 0 4px'}}>{selected.address}</h2>
-                <p style={{fontSize:13,color:C.muted,margin:0}}>{selected.area} · {selected.deal_type==='sale'?'Πώληση':'Μίσθωση'} · {COND[selected.condition]}</p>
+                <p style={{fontSize:13,color:C.muted,margin:0}}>{selected.area} · {selected.deal_type==='sale'?'Πώληση':'Μίσθωση'} · {COND[selected.condition]}{selected.ilist_code&&' · i-list: '+selected.ilist_code}</p>
               </div>
               <div style={{display:'flex',gap:8}}>
-                <Link href={'/properties/'+selected.id} style={{background:C.red,color:'#fff',borderRadius:8,padding:'8px 16px',textDecoration:'none',fontSize:12,fontWeight:600,whiteSpace:'nowrap'}}>📋 Πλήρης Φάκελος</Link>
+                {selected.status==='active'&&(
+                  <button onClick={()=>setOhProp(selected)}
+                    style={{background:C.amber,color:'#fff',border:'none',borderRadius:8,padding:'8px 16px',fontSize:12,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}}>
+                    🏠 Open House
+                  </button>
+                )}
+                <Link href={'/properties/'+selected.id} style={{background:C.red,color:'#fff',borderRadius:8,padding:'8px 16px',textDecoration:'none',fontSize:12,fontWeight:600,whiteSpace:'nowrap'}}>📋 Φάκελος</Link>
                 <button onClick={()=>setSelected(null)} style={{background:C.subtle,border:'none',borderRadius:8,padding:'8px 14px',cursor:'pointer',fontSize:12,color:C.muted,fontWeight:600}}>✕</button>
               </div>
             </div>
@@ -217,7 +235,7 @@ export default function ProfilePage(){
               ))}
             </div>
             {selected.price_final&&(
-              <div style={{padding:'14px 18px',borderRadius:12,background:C.greenLight,display:'flex',gap:24,alignItems:'center'}}>
+              <div style={{padding:'14px 18px',borderRadius:12,background:C.greenLight,display:'flex',gap:24}}>
                 <div><div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:3,textTransform:'uppercase',letterSpacing:.4}}>Τελική τιμή</div><div style={{fontSize:22,fontWeight:800,color:C.green}}>€{selected.price_final.toLocaleString()}</div></div>
                 {selected.sold_at&&selected.listed_at&&<div><div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:3,textTransform:'uppercase',letterSpacing:.4}}>Ημέρες αγοράς</div><div style={{fontSize:22,fontWeight:800,color:C.green}}>{Math.round((new Date(selected.sold_at)-new Date(selected.listed_at))/864e5)}</div></div>}
                 <div><div style={{fontSize:10,color:C.muted,fontWeight:600,marginBottom:3,textTransform:'uppercase',letterSpacing:.4}}>Έκπτωση</div><div style={{fontSize:22,fontWeight:800,color:C.green}}>{Math.round((1-selected.price_final/selected.price_asking)*100)}%</div></div>
