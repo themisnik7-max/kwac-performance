@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
+import Shell from '@/components/Shell'
 import { createClient } from '@/lib/supabase'
-import Sidebar from '@/components/Sidebar'
 
 export default function BoardPage() {
   const [agent, setAgent] = useState<any>(null)
@@ -52,16 +52,16 @@ export default function BoardPage() {
         method: 'DELETE', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ open_house_id: ohId, agent_id: agent.id })
       })
-      setToast('Αφαιρέθηκες από τους εθελοντές')
+      setToast('ÎÏÎ±Î¹ÏÎ­Î¸Î·ÎºÎµÏ Î±ÏÏ ÏÎ¿ÏÏ ÎµÎ¸ÎµÎ»Î¿Î½ÏÎ­Ï')
     } else {
-      if (myVols.length >= 2) { setToast('Οι 2 θέσεις έχουν συμπληρωθεί'); setTimeout(() => setToast(''), 3000); return }
+      if (myVols.length >= 2) { setToast('ÎÎ¹ 2 Î¸Î­ÏÎµÎ¹Ï Î­ÏÎ¿ÏÎ½ ÏÏÎ¼ÏÎ»Î·ÏÏÎ¸ÎµÎ¯'); setTimeout(() => setToast(''), 3000); return }
       const res = await fetch('/api/open-house-volunteers', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({ open_house_id: ohId, agent_id: agent.id })
       })
       const d = await res.json()
-      if (!res.ok) { setToast(d.error || 'Σφάλμα'); setTimeout(() => setToast(''), 3000); return }
-      setToast('✅ Δηλώθηκες εθελοντής!')
+      if (!res.ok) { setToast(d.error || 'Î£ÏÎ¬Î»Î¼Î±'); setTimeout(() => setToast(''), 3000); return }
+      setToast('â ÎÎ·Î»ÏÎ¸Î·ÎºÎµÏ ÎµÎ¸ÎµÎ»Î¿Î½ÏÎ®Ï!')
     }
     await fetchData()
     setTimeout(() => setToast(''), 3000)
@@ -72,14 +72,12 @@ export default function BoardPage() {
   }
 
   return (
-    <div style={{display:'flex',minHeight:'100vh',background:'#f8f8f7'}}>
-      <Sidebar active="board" role={agent?.role} />
-      <main style={{flex:1,padding:'2rem',maxWidth:900}}>
+    <Shell><div style={{padding:"2rem",maxWidth:1100}}>
         <div style={{marginBottom:'1.5rem'}}>
-          <h1 style={{fontSize:22,fontWeight:500,color:'#1a1a1a',margin:0}}>Πίνακας Ανακοινώσεων</h1>
+          <h1 style={{fontSize:22,fontWeight:500,color:'#1a1a1a',margin:0}}>Î Î¯Î½Î±ÎºÎ±Ï ÎÎ½Î±ÎºÎ¿Î¹Î½ÏÏÎµÏÎ½</h1>
         </div>
 
-        {toast && <div style={{background: toast.includes('✅')?'#EAF3DE':'#FCEBEB', color: toast.includes('✅')?'#3B6D11':'#A32D2D', padding:'10px 16px',borderRadius:8,marginBottom:16,fontSize:14}}>{toast}</div>}
+        {toast && <div style={{background: toast.includes('â')?'#EAF3DE':'#FCEBEB', color: toast.includes('â')?'#3B6D11':'#A32D2D', padding:'10px 16px',borderRadius:8,marginBottom:16,fontSize:14}}>{toast}</div>}
 
         <div style={{display:'flex',gap:8,marginBottom:20}}>
           {(['openhouses','announcements'] as const).map(t => (
@@ -87,14 +85,14 @@ export default function BoardPage() {
               style={{padding:'7px 16px',borderRadius:8,fontSize:13,cursor:'pointer',fontWeight:500,
                 background: tab===t ? '#CC2229' : '#fff', color: tab===t ? '#fff' : '#666',
                 border: `0.5px solid ${tab===t ? '#CC2229' : '#ddd'}`}}>
-              {t === 'openhouses' ? '🏠 Open Houses' : '📢 Ανακοινώσεις'}
+              {t === 'openhouses' ? 'ð  Open Houses' : 'ð¢ ÎÎ½Î±ÎºÎ¿Î¹Î½ÏÏÎµÎ¹Ï'}
             </button>
           ))}
         </div>
 
         {tab === 'openhouses' && (
           <div style={{display:'flex',flexDirection:'column',gap:12}}>
-            {openHouses.length === 0 && <div style={{color:'#bbb',fontSize:14,padding:'2rem',textAlign:'center'}}>Δεν υπάρχουν προγραμματισμένα Open Houses</div>}
+            {openHouses.length === 0 && <div style={{color:'#bbb',fontSize:14,padding:'2rem',textAlign:'center'}}>ÎÎµÎ½ ÏÏÎ¬ÏÏÎ¿ÏÎ½ ÏÏÎ¿Î³ÏÎ±Î¼Î¼Î±ÏÎ¹ÏÎ¼Î­Î½Î± Open Houses</div>}
             {openHouses.map(oh => {
               const vols = volunteers[oh.id] || []
               const iAmIn = vols.some(v => v.agent_id === agent?.id)
@@ -108,9 +106,9 @@ export default function BoardPage() {
                         {oh.ilist_code && <span style={{fontSize:11,color:'#888',background:'#f5f5f5',padding:'2px 6px',borderRadius:4}}>#{oh.ilist_code}</span>}
                       </div>
                       <div style={{fontSize:13,color:'#666'}}>
-                        📅 {formatDate(oh.date)} &nbsp;⏰ {oh.time_start} – {oh.time_end}
-                        {oh.property_type && <>&nbsp;&nbsp;🏠 {oh.property_type}</>}
-                        {oh.price && <>&nbsp;&nbsp;💶 {Number(oh.price).toLocaleString('el-GR')}€</>}
+                        ð {formatDate(oh.date)} &nbsp;â° {oh.time_start} â {oh.time_end}
+                        {oh.property_type && <>&nbsp;&nbsp;ð  {oh.property_type}</>}
+                        {oh.price && <>&nbsp;&nbsp;ð¶ {Number(oh.price).toLocaleString('el-GR')}â¬</>}
                       </div>
                       {oh.notes && <div style={{fontSize:12,color:'#888',marginTop:4}}>{oh.notes}</div>}
                     </div>
@@ -119,14 +117,14 @@ export default function BoardPage() {
                         background: iAmIn ? '#EAF3DE' : isFull ? '#f5f5f5' : '#fff5f5',
                         color: iAmIn ? '#3B6D11' : isFull ? '#aaa' : '#CC2229',
                         border: `0.5px solid ${iAmIn ? '#C0DD97' : isFull ? '#ddd' : '#f0c0c0'}`}}>
-                      {iAmIn ? '✓ Συμμετέχω' : isFull ? 'Πλήρες' : '+ Εθελοντής'}
+                      {iAmIn ? 'â Î£ÏÎ¼Î¼ÎµÏÎ­ÏÏ' : isFull ? 'Î Î»Î®ÏÎµÏ' : '+ ÎÎ¸ÎµÎ»Î¿Î½ÏÎ®Ï'}
                     </button>
                   </div>
 
                   {/* Volunteers section */}
                   <div style={{marginTop:10,paddingTop:10,borderTop:'0.5px solid #f5f5f5',display:'flex',alignItems:'center',gap:8}}>
-                    <span style={{fontSize:12,color:'#888'}}>Εθελοντές ({vols.length}/2):</span>
-                    {vols.length === 0 && <span style={{fontSize:12,color:'#bbb'}}>Κανείς ακόμα</span>}
+                    <span style={{fontSize:12,color:'#888'}}>ÎÎ¸ÎµÎ»Î¿Î½ÏÎ­Ï ({vols.length}/2):</span>
+                    {vols.length === 0 && <span style={{fontSize:12,color:'#bbb'}}>ÎÎ±Î½ÎµÎ¯Ï Î±ÎºÏÎ¼Î±</span>}
                     {vols.map(v => (
                       <span key={v.id} style={{fontSize:12,background:'#E6F1FB',color:'#185FA5',padding:'2px 8px',borderRadius:20,fontWeight:500}}>
                         {v.agents?.full_name || 'Agent'}
@@ -134,7 +132,7 @@ export default function BoardPage() {
                     ))}
                     {[...Array(Math.max(0, 2 - vols.length))].map((_, i) => (
                       <span key={i} style={{fontSize:12,background:'#f5f5f5',color:'#bbb',padding:'2px 8px',borderRadius:20}}>
-                        Κενή θέση
+                        ÎÎµÎ½Î® Î¸Î­ÏÎ·
                       </span>
                     ))}
                   </div>
@@ -146,7 +144,7 @@ export default function BoardPage() {
 
         {tab === 'announcements' && (
           <div style={{display:'flex',flexDirection:'column',gap:10}}>
-            {announcements.length === 0 && <div style={{color:'#bbb',fontSize:14,padding:'2rem',textAlign:'center'}}>Δεν υπάρχουν ανακοινώσεις</div>}
+            {announcements.length === 0 && <div style={{color:'#bbb',fontSize:14,padding:'2rem',textAlign:'center'}}>ÎÎµÎ½ ÏÏÎ¬ÏÏÎ¿ÏÎ½ Î±Î½Î±ÎºÎ¿Î¹Î½ÏÏÎµÎ¹Ï</div>}
             {announcements.map(a => (
               <div key={a.id} style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,padding:'1rem 1.25rem'}}>
                 <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
@@ -158,7 +156,6 @@ export default function BoardPage() {
             ))}
           </div>
         )}
-      </main>
-    </div>
+      </div></Shell>
   )
 }
