@@ -8,6 +8,7 @@ const NAV_AGENT = [
   { href: '/submit', icon: '✎', label: 'Μετρησιμότητα' },
   { href: '/gps', icon: '🎯', label: 'GPS Στόχοι' },
   { href: '/profile', icon: '⊙', label: 'Ακίνητα & Χάρτης' },
+  { href: '/monitor', icon: '🔔', label: 'Property Monitor' },
   { href: '/sprint', icon: '⚡', label: 'Sprint Calls' },
   { href: '/rooms', icon: '◫', label: 'Αίθουσες' },
   { href: '/board', icon: '◈', label: 'Πίνακας' },
@@ -17,6 +18,7 @@ const NAV_AGENT = [
 const NAV_CEO = [
   { href: '/intelligence', icon: '◉', label: 'Intelligence' },
   { href: '/dashboard', icon: '▦', label: 'Dashboard' },
+  { href: '/monitor', icon: '🔔', label: 'Property Monitor' },
   { href: '/profile', icon: '⊙', label: 'Ακίνητα & Χάρτης' },
   { href: '/sprint', icon: '⚡', label: 'Sprint Calls' },
   { href: '/rooms', icon: '◫', label: 'Αίθουσες' },
@@ -39,7 +41,6 @@ export default function Sidebar() {
 
   function switchRole(newRole: 'agent' | 'ceo') {
     setDemoRole(newRole)
-    // Navigate to appropriate home
     if (newRole === 'ceo') router.push('/intelligence')
     else router.push('/dashboard')
   }
@@ -50,7 +51,6 @@ export default function Sidebar() {
       display: 'flex', flexDirection: 'column', padding: '1.5rem 0', flexShrink: 0,
       position: 'sticky', top: 0, height: '100vh', overflowY: 'auto'
     }}>
-      {/* Logo */}
       <div style={{ padding: '0 1.25rem 1.25rem', borderBottom: '0.5px solid #2a2a2a', marginBottom: '0.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: '#CC2229', fontWeight: 700, fontSize: 17, letterSpacing: '.03em' }}>KWAC</span>
@@ -59,7 +59,6 @@ export default function Sidebar() {
         <div style={{ color: '#555', fontSize: 11, marginTop: 2 }}>Performance OS</div>
       </div>
 
-      {/* Nav */}
       <nav style={{ flex: 1 }}>
         {NAV.map(n => {
           const isActive = pathname === n.href || (n.href !== '/' && pathname?.startsWith(n.href))
@@ -79,41 +78,27 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Demo switcher + logout */}
       <div style={{ padding: '0.75rem 1.25rem', borderTop: '0.5px solid #2a2a2a' }}>
         <div style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 8 }}>
           {agent ? (isCeo ? '👔 CEO View' : '🏠 Agent View') : '🔧 Demo Mode'}
         </div>
-        {/* Always show switcher — in demo mode or when logged in */}
         <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
-          <button
-            onClick={() => switchRole('agent')}
-            style={{
-              flex: 1, padding: '6px 4px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
-              background: !isCeo ? '#CC2229' : 'transparent',
-              color: !isCeo ? '#fff' : '#555',
-              border: !isCeo ? 'none' : '0.5px solid #333',
-              fontWeight: !isCeo ? 600 : 400
-            }}>
+          <button onClick={() => switchRole('agent')}
+            style={{ flex: 1, padding: '6px 4px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
+              background: !isCeo ? '#CC2229' : 'transparent', color: !isCeo ? '#fff' : '#555',
+              border: !isCeo ? 'none' : '0.5px solid #333', fontWeight: !isCeo ? 600 : 400 }}>
             Agent
           </button>
-          <button
-            onClick={() => switchRole('ceo')}
-            style={{
-              flex: 1, padding: '6px 4px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
-              background: isCeo ? '#CC2229' : 'transparent',
-              color: isCeo ? '#fff' : '#555',
-              border: isCeo ? 'none' : '0.5px solid #333',
-              fontWeight: isCeo ? 600 : 400
-            }}>
+          <button onClick={() => switchRole('ceo')}
+            style={{ flex: 1, padding: '6px 4px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
+              background: isCeo ? '#CC2229' : 'transparent', color: isCeo ? '#fff' : '#555',
+              border: isCeo ? 'none' : '0.5px solid #333', fontWeight: isCeo ? 600 : 400 }}>
             CEO
           </button>
         </div>
-        <button onClick={logout} style={{
-          width: '100%', padding: '7px', background: 'none',
-          border: '0.5px solid #333', borderRadius: 8, color: '#555',
-          fontSize: 12, cursor: 'pointer'
-        }}>Αποσύνδεση</button>
+        <button onClick={logout} style={{ width: '100%', padding: '7px', background: 'none', border: '0.5px solid #333', borderRadius: 8, color: '#555', fontSize: 12, cursor: 'pointer' }}>
+          Αποσύνδεση
+        </button>
       </div>
     </aside>
   )
