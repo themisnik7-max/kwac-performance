@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { AppProvider } from '@/lib/AppContext'
 
 export const metadata: Metadata = {
   title: 'KWAC Performance OS',
@@ -9,8 +10,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="el">
-      <body style={{ margin: 0, padding: 0, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', background: '#f8f8f7' }}>
-        {children}
+      <body style={{ margin: 0, padding: 0, fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif', background: '#f8f8f7' }}>
+        <AppProvider>
+          {children}
+        </AppProvider>
       </body>
     </html>
   )
