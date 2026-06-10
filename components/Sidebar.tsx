@@ -27,15 +27,21 @@ const NAV_CEO = [
 export default function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
-  const { role, demoRole, setDemoRole, agent } = useApp()
+  const { role, setDemoRole, agent } = useApp()
   const supabase = createClient()
   const isCeo = role === 'ceo' || role === 'admin'
   const NAV = isCeo ? NAV_CEO : NAV_AGENT
-  const isDemo = !agent  // no real agent = demo mode
 
   async function logout() {
     await supabase.auth.signOut()
     router.push('/login')
+  }
+
+  function switchRole(newRole: 'agent' | 'ceo') {
+    setDemoRole(newRole)
+    // Navigate to appropriate home
+    if (newRole === 'ceo') router.push('/intelligence')
+    else router.push('/dashboard')
   }
 
   return (
@@ -48,9 +54,7 @@ export default function Sidebar() {
       <div style={{ padding: '0 1.25rem 1.25rem', borderBottom: '0.5px solid #2a2a2a', marginBottom: '0.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: '#CC2229', fontWeight: 700, fontSize: 17, letterSpacing: '.03em' }}>KWAC</span>
-          {isCeo && (
-            <span style={{ background: '#CC2229', color: '#fff', fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>CEO</span>
-          )}
+          {isCeo && <span style={{ background: '#CC2229', color: '#fff', fontSize: 10, padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>CEO</span>}
         </div>
         <div style={{ color: '#555', fontSize: 11, marginTop: 2 }}>Performance OS</div>
       </div>
@@ -58,7 +62,7 @@ export default function Sidebar() {
       {/* Nav */}
       <nav style={{ flex: 1 }}>
         {NAV.map(n => {
-          const isActive = pathname?.startsWith(n.href)
+          const isActive = pathname === n.href || (n.href !== '/' && pathname?.startsWith(n.href))
           return (
             <a key={n.href} href={n.href} style={{
               display: 'flex', alignItems: 'center', gap: 10,
@@ -75,29 +79,36 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Demo role switcher */}
-      <div style={{ padding: '0.75rem 1.25rem', borderTop: '0.5px solid #2a2a2a', marginTop: '0.5rem' }}>
-        <div style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 6 }}>
+      {/* Demo switcher + logout */}
+      <div style={{ padding: '0.75rem 1.25rem', borderTop: '0.5px solid #2a2a2a' }}>
+        <div style={{ fontSize: 10, color: '#444', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 8 }}>
           {agent ? (isCeo ? '👔 CEO View' : '🏠 Agent View') : '🔧 Demo Mode'}
         </div>
-        {(!agent || isDemo) && (
-          <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-            <button onClick={() => setDemoRole('agent')}
-              style={{ flex: 1, padding: '5px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
-                background: !isCeo ? '#CC2229' : '#2a2a2a',
-                color: !isCeo ? '#fff' : '#666',
-                border: !isCeo ? 'none' : '0.5px solid #333' }}>
-              Agent
-            </button>
-            <button onClick={() => setDemoRole('ceo')}
-              style={{ flex: 1, padding: '5px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
-                background: isCeo ? '#CC2229' : '#2a2a2a',
-                color: isCeo ? '#fff' : '#666',
-                border: isCeo ? 'none' : '0.5px solid #333' }}>
-              CEO
-            </button>
-          </div>
-        )}
+        {/* Always show switcher — in demo mode or when logged in */}
+        <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+          <button
+            onClick={() => switchRole('agent')}
+            style={{
+              flex: 1, padding: '6px 4px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
+              background: !isCeo ? '#CC2229' : 'transparent',
+              color: !isCeo ? '#fff' : '#555',
+              border: !isCeo ? 'none' : '0.5px solid #333',
+              fontWeight: !isCeo ? 600 : 400
+            }}>
+            Agent
+          </button>
+          <button
+            onClick={() => switchRole('ceo')}
+            style={{
+              flex: 1, padding: '6px 4px', fontSize: 11, borderRadius: 6, cursor: 'pointer',
+              background: isCeo ? '#CC2229' : 'transparent',
+              color: isCeo ? '#fff' : '#555',
+              border: isCeo ? 'none' : '0.5px solid #333',
+              fontWeight: isCeo ? 600 : 400
+            }}>
+            CEO
+          </button>
+        </div>
         <button onClick={logout} style={{
           width: '100%', padding: '7px', background: 'none',
           border: '0.5px solid #333', borderRadius: 8, color: '#555',
