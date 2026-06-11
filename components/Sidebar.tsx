@@ -5,25 +5,27 @@ import { createClient } from '@/lib/supabase'
 
 const NAV_AGENT = [
   { href: '/dashboard',  icon: '▦',  label: 'Dashboard' },
-  { href: '/submit',     icon: '✎',  label: 'Μετρησιμότητα' },
-  { href: '/gps',        icon: '🎯', label: 'GPS Στόχοι' },
-  { href: '/pipeline',   icon: '🏠', label: 'Pipeline Ακινήτων' },
-  { href: '/profile',    icon: '⊙',  label: 'Χάρτης' },
+  { href: '/submit',     icon: '✎',  label: 'Μετρησιμοτητα' },
+  { href: '/gps',        icon: '🎯', label: 'GPS Στοχοι' },
+  { href: '/pipeline',   icon: '🏠', label: 'Pipeline Ακινητων' },
+  { href: '/meeting',    icon: '💰', label: 'Μιτινγκ Ακινητων' },
+  { href: '/profile',    icon: '⊙',  label: 'Χαρτης' },
   { href: '/sprint',     icon: '⚡', label: 'Sprint Calls' },
-  { href: '/rooms',      icon: '◫',  label: 'Αίθουσες' },
-  { href: '/board',      icon: '◈',  label: 'Πίνακας' },
-  { href: '/valuation',  icon: '◎',  label: 'Εκτίμηση' },
+  { href: '/rooms',      icon: '◫',  label: 'Αιθουσες' },
+  { href: '/board',      icon: '◈',  label: 'Πινακας' },
+  { href: '/valuation',  icon: '◎',  label: 'Εκτιμηση' },
 ]
 
 const NAV_CEO = [
   { href: '/intelligence', icon: '◉', label: 'Intelligence' },
   { href: '/dashboard',    icon: '▦',  label: 'Dashboard' },
-  { href: '/pipeline',     icon: '🏠', label: 'Pipeline Ακινήτων' },
-  { href: '/profile',      icon: '⊙',  label: 'Χάρτης' },
+  { href: '/pipeline',     icon: '🏠', label: 'Pipeline Ακινητων' },
+  { href: '/meeting',      icon: '💰', label: 'Μιτινγκ Ακινητων' },
+  { href: '/profile',      icon: '⊙',  label: 'Χαρτης' },
   { href: '/sprint',       icon: '⚡', label: 'Sprint Calls' },
-  { href: '/rooms',        icon: '◫',  label: 'Αίθουσες' },
-  { href: '/board',        icon: '◈',  label: 'Πίνακας' },
-  { href: '/valuation',    icon: '◎',  label: 'Εκτίμηση' },
+  { href: '/rooms',        icon: '◫',  label: 'Αιθουσες' },
+  { href: '/board',        icon: '◈',  label: 'Πινακας' },
+  { href: '/valuation',    icon: '◎',  label: 'Εκτιμηση' },
 ]
 
 export default function Sidebar() {
@@ -46,59 +48,33 @@ export default function Sidebar() {
   }
 
   return (
-    <aside style={{
-      width:220, minWidth:220, background:'#1a1a1a', minHeight:'100vh',
-      display:'flex', flexDirection:'column', padding:'1.5rem 0', flexShrink:0,
-      position:'sticky', top:0, height:'100vh', overflowY:'auto'
-    }}>
-      <div style={{ padding:'0 1.25rem 1.25rem', borderBottom:'0.5px solid #2a2a2a', marginBottom:'0.5rem' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <span style={{ color:'#CC2229', fontWeight:700, fontSize:17, letterSpacing:'.03em' }}>KWAC</span>
-          {isCeo && <span style={{ background:'#CC2229', color:'#fff', fontSize:10, padding:'1px 6px', borderRadius:4, fontWeight:600 }}>CEO</span>}
+    <aside style={{width:220,minWidth:220,background:'#1a1a1a',minHeight:'100vh',display:'flex',flexDirection:'column',padding:'1.5rem 0',flexShrink:0,position:'sticky',top:0,height:'100vh',overflowY:'auto'}}>
+      <div style={{padding:'0 1.25rem 1.25rem',borderBottom:'0.5px solid #2a2a2a',marginBottom:'0.5rem'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span style={{color:'#CC2229',fontWeight:700,fontSize:17,letterSpacing:'.03em'}}>KWAC</span>
+          {isCeo && <span style={{background:'#CC2229',color:'#fff',fontSize:10,padding:'1px 6px',borderRadius:4,fontWeight:600}}>CEO</span>}
         </div>
-        <div style={{ color:'#555', fontSize:11, marginTop:2 }}>Performance OS</div>
+        <div style={{color:'#555',fontSize:11,marginTop:2}}>Performance OS</div>
       </div>
-
-      <nav style={{ flex:1 }}>
+      <nav style={{flex:1}}>
         {NAV.map(n => {
           const isActive = pathname === n.href || (n.href !== '/' && pathname?.startsWith(n.href))
           return (
-            <a key={n.href} href={n.href} style={{
-              display:'flex', alignItems:'center', gap:10,
-              padding:'10px 1.25rem', fontSize:13,
-              color: isActive ? '#fff' : '#777',
-              background: isActive ? '#2a2a2a' : 'transparent',
-              borderLeft: isActive ? '2px solid #CC2229' : '2px solid transparent',
-              textDecoration:'none', transition:'all .12s'
-            }}>
-              <span style={{ fontSize:14, minWidth:18 }}>{n.icon}</span>
-              {n.label}
+            <a key={n.href} href={n.href} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 1.25rem',fontSize:13,color:isActive?'#fff':'#777',background:isActive?'#2a2a2a':'transparent',borderLeft:isActive?'2px solid #CC2229':'2px solid transparent',textDecoration:'none',transition:'all .12s'}}>
+              <span style={{fontSize:14,minWidth:18}}>{n.icon}</span>{n.label}
             </a>
           )
         })}
       </nav>
-
-      <div style={{ padding:'0.75rem 1.25rem', borderTop:'0.5px solid #2a2a2a' }}>
-        <div style={{ fontSize:10, color:'#444', textTransform:'uppercase', letterSpacing:'.08em', marginBottom:8 }}>
-          {agent ? (isCeo ? '👔 CEO View' : '🏠 Agent View') : '🔧 Demo Mode'}
+      <div style={{padding:'0.75rem 1.25rem',borderTop:'0.5px solid #2a2a2a'}}>
+        <div style={{fontSize:10,color:'#444',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:8}}>
+          {agent?(isCeo?'👔 CEO View':'🏠 Agent View'):'🔧 Demo Mode'}
         </div>
-        <div style={{ display:'flex', gap:4, marginBottom:10 }}>
-          <button onClick={()=>switchRole('agent')}
-            style={{ flex:1, padding:'6px 4px', fontSize:11, borderRadius:6, cursor:'pointer',
-              background:!isCeo?'#CC2229':'transparent', color:!isCeo?'#fff':'#555',
-              border:!isCeo?'none':'0.5px solid #333', fontWeight:!isCeo?600:400 }}>
-            Agent
-          </button>
-          <button onClick={()=>switchRole('ceo')}
-            style={{ flex:1, padding:'6px 4px', fontSize:11, borderRadius:6, cursor:'pointer',
-              background:isCeo?'#CC2229':'transparent', color:isCeo?'#fff':'#555',
-              border:isCeo?'none':'0.5px solid #333', fontWeight:isCeo?600:400 }}>
-            CEO
-          </button>
+        <div style={{display:'flex',gap:4,marginBottom:10}}>
+          <button onClick={()=>switchRole('agent')} style={{flex:1,padding:'6px 4px',fontSize:11,borderRadius:6,cursor:'pointer',background:!isCeo?'#CC2229':'transparent',color:!isCeo?'#fff':'#555',border:!isCeo?'none':'0.5px solid #333',fontWeight:!isCeo?600:400}}>Agent</button>
+          <button onClick={()=>switchRole('ceo')} style={{flex:1,padding:'6px 4px',fontSize:11,borderRadius:6,cursor:'pointer',background:isCeo?'#CC2229':'transparent',color:isCeo?'#fff':'#555',border:isCeo?'none':'0.5px solid #333',fontWeight:isCeo?600:400}}>CEO</button>
         </div>
-        <button onClick={logout} style={{ width:'100%', padding:'7px', background:'none', border:'0.5px solid #333', borderRadius:8, color:'#555', fontSize:12, cursor:'pointer' }}>
-          Αποσύνδεση
-        </button>
+        <button onClick={logout} style={{width:'100%',padding:'7px',background:'none',border:'0.5px solid #333',borderRadius:8,color:'#555',fontSize:12,cursor:'pointer'}}>Αποσυνδεση</button>
       </div>
     </aside>
   )
