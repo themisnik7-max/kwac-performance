@@ -1,5 +1,7 @@
 "use client";
 import{useState,useRef}from"react";
+import{supabase}from"@/lib/supabase";
+import{useApp}from"@/lib/AppContext";
 const RED="#CC2229";
 const BG="#ffffff";
 const BG2="#f5f5f5";
@@ -18,8 +20,6 @@ const FM={"Υπόγειο":0.75,"Ισόγειο":0.88,"1ος":0.93,"2ος":1.0,"
 const CM={"Μέτρια":0.82,"Καλή":1.0,"Πολύ καλή":1.10,"Άριστη":1.20,"Νεόδμητο":1.28};
 const TM={"Διαμέρισμα":1.0,"Μεζονέτα":1.12,"Μονοκατοικία":1.25,"Επαγγελματικός":0.85,"Αποθήκη":0.35,"Οικόπεδο":0.45};
 const FI=[{f:"Εμβαδόν",v:45},{f:"Τιμή αγοράς περιοχής",v:18},{f:"Γεωγρ. θέση",v:12},{f:"Υπνοδωμάτια",v:9},{f:"Τύπος ακινήτου",v:6},{f:"Κατάσταση",v:4},{f:"Ηλικία",v:3},{f:"Εξτρά",v:2},{f:"Όροφος",v:1}];
-const SB="https://yihnycafoaemoambrdfd.supabase.co";
-const AK="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpaG55Y2Fmb2FlbW9hbWJyZGZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NDU2NTQsImV4cCI6MjA5NjQyMTY1NH0.hZVtBbnPEwd_aInDrMiXrLTHSIWlWNimPRfAOC9O66A";
 
 function hav(a,b,c,d){const R=6371,dr=Math.PI/180;const x=Math.sin((c-a)*dr/2)**2+Math.cos(a*dr)*Math.cos(c*dr)*Math.sin((d-b)*dr/2)**2;return R*2*Math.asin(Math.sqrt(x));}
 function nearest(lat,lng){let best=null,bd=999;for(const[n,h]of Object.entries(HOODS)){const d=hav(lat,lng,h.lat,h.lng);if(d<bd){bd=d;best={name:n,...h,dist:Math.round(d*100)/100};}}return best;}
@@ -28,6 +28,7 @@ function calcPrice(f){const lat=parseFloat(f.lat)||37.98,lng=parseFloat(f.lng)||
 const STEPS=["Τοποθεσία","Στοιχεία","Κατάσταση","Αποτέλεσμα"];
 
 export default function V(){
+const{agent,role,loading:agentLoading}=useApp();
 const init={address:"",lat:"",lng:"",sqm:"",bd:"2",floor:"2ος",yb:"2000",cond:"Καλή",ptype:"Διαμέρισμα",tx:"sale",synt:"",kal:"",pros:"",renovItems:[],is_corner:false,is_front:false,has_balcony:false,has_elevator:false,has_parking:false,has_storage:false,needs_renovation:false};
 const[f,sf]=useState(init);const[step,ss]=useState(0);const[res,sr]=useState(null);const[fb,sfb]=useState("");const[ok,sok]=useState(false);const[geo,sg]=useState(false);const[sugs,setSugs]=useState([]);const[searching,setSearching]=useState(false);
 const debRef=useRef(null);
@@ -39,7 +40,7 @@ const onAddr=e=>{const val=e.target.value;sf(p=>({...p,address:val,lat:"",lng:""
 const pickSug=sg=>{sf(p=>({...p,address:sg.display,lat:String(sg.lat),lng:String(sg.lng)}));setSugs([]);};
 const geoGet=()=>{sg(true);navigator.geolocation?.getCurrentPosition(async pos=>{const{latitude:lat,longitude:lng}=pos.coords;const r=await fetch("https://nominatim.openstreetmap.org/reverse?format=json&lat="+lat+"&lon="+lng+"&accept-language=el",{headers:{"User-Agent":"KWAC-OS/1.0"}});const d=await r.json();const addr=(d.address?.road||"")+" "+(d.address?.house_number||"")+", "+(d.address?.city||d.address?.town||d.address?.suburb||"");sf(p=>({...p,address:addr.trim(),lat:String(lat.toFixed(6)),lng:String(lng.toFixed(6))}));sg(false);},()=>sg(false));};
 const go=()=>{if(!f.sqm||!f.lat)return;sr(calcPrice(f));ss(3);sok(false);sfb("");};
-const send=async()=>{if(!fb)return;await fetch(SB+"/rest/v1/property_valuations",{method:"POST",headers:{apikey:AK,Authorization:"Bearer "+AK,"Content-Type":"application/json"},body:JSON.stringify({estimated_min:res.p10,estimated_max:res.p90,reasoning:JSON.stringify(f),expert_feedback:fb,created_at:new Date().toISOString()})});sok(true);};
+const send=async()=>{if(!fb||!agent)return;const{error}=await supabase.from("property_valuations").insert({estimated_min:res.p10,estimated_max:res.p90,reasoning:JSON.stringify(f),expert_feedback:fb,agent_id:agent.id,agency_id:agent.agency_id,created_at:new Date().toISOString()});if(!error)sok(true);};
 const fmt=n=>Math.round(n||0).toLocaleString("el-GR");
 const lbl=res?.isRen?"€/μήνα":"€";
 const isOik=f.ptype==="Οικόπεδο";
@@ -49,6 +50,13 @@ const chip=(active,onClick,label)=>(<button onClick={onClick} style={{padding:"7
 const inp={width:"100%",padding:"10px 14px",borderRadius:8,border:"1.5px solid "+BORDER,background:"white",color:TEXT,fontSize:14,outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
 const lb={fontSize:12,fontWeight:600,color:TEXT2,marginBottom:6,display:"block",letterSpacing:".02em"};
 
+// Per PRODUCT_SPEC.md: the appraiser shouldn't be open to everyone yet.
+// Gate it to CEO/Admin until the comp-based model is wired up and there's a
+// product decision on wider rollout.
+if(agentLoading)return<div style={{padding:"32px 40px",color:TEXT3}}>Φόρτωση...</div>;
+if(!agent)return<div style={{padding:"32px 40px",color:TEXT3}}>Χρειάζεται σύνδεση.</div>;
+if(role!=="ceo")return<div style={{padding:"32px 40px",color:TEXT3}}>Αυτό το εργαλείο δεν είναι ακόμα διαθέσιμο σε όλους τους μεσίτες.</div>;
+
 return(<div style={{background:BG,minHeight:"100vh",padding:"32px 40px",fontFamily:"system-ui,sans-serif",color:TEXT}}>
   <div style={{maxWidth:1100,margin:"0 auto"}}>
 
@@ -56,7 +64,7 @@ return(<div style={{background:BG,minHeight:"100vh",padding:"32px 40px",fontFami
   <div style={{marginBottom:28}}>
     <div style={{fontSize:11,fontWeight:600,letterSpacing:".12em",color:RED,textTransform:"uppercase",marginBottom:6}}>KWAC Performance OS</div>
     <h1 style={{margin:0,fontSize:22,fontWeight:700,color:TEXT,letterSpacing:"-0.02em"}}>Εκτιμητής ακινήτου</h1>
-    <p style={{margin:"5px 0 0",color:TEXT3,fontSize:13}}>HistGradientBoosting · Quantile p10/p90 · Haversine KNN · R²=0.93</p>
+    <p style={{margin:"5px 0 0",color:TEXT3,fontSize:13}}>Εκτίμηση βάσει τοποθεσίας &amp; χαρακτηριστικών — ενδεικτική, δεν αντικαθιστά επαγγελματική εκτίμηση</p>
   </div>
 
   {/* Steps */}
@@ -189,7 +197,7 @@ return(<div style={{background:BG,minHeight:"100vh",padding:"32px 40px",fontFami
   </div>}
 
   <div style={{marginTop:"2rem",paddingTop:"1rem",borderTop:"1px solid "+BORDER,display:"flex",gap:20,flexWrap:"wrap",fontSize:11,color:TEXT3}}>
-    <span>HistGradientBoosting · Quantile p10/p90 · Haversine KNN · R²=0.93</span>
+    <span>Μοντέλο: βάση τιμής ανά περιοχή × πολλαπλασιαστές χαρακτηριστικών (όχι ML)</span>
     <span>Geocoding: OpenStreetMap Nominatim</span>
   </div>
   </div>

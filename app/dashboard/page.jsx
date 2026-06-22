@@ -1,7 +1,6 @@
 "use client";
 import{useState,useEffect}from"react";
-const SB="https://yihnycafoaemoambrdfd.supabase.co";
-const AK="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpaG55Y2Fmb2FlbW9hbWJyZGZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NDU2NTQsImV4cCI6MjA5NjQyMTY1NH0.hZVtBbnPEwd_aInDrMiXrLTHSIWlWNimPRfAOC9O66A";
+import{supabase}from"@/lib/supabase";
 const RED="#CC2229";
 
 function MetricCard({label,value,sub,accent}){
@@ -31,11 +30,13 @@ const hour=now.getHours();
 const greeting=hour<12?"Καλημέρα":hour<18?"Καλησπέρα":"Καλησπέρα";
 
 useEffect(()=>{
+  // Uses the shared, session-aware Supabase client (not a hardcoded key) so
+  // these counts respect RLS — an agent only sees their own agency's data.
   Promise.all([
-    fetch(SB+"/rest/v1/agents?select=id",{headers:{apikey:AK,Authorization:"Bearer "+AK,Prefer:"count=exact",Range:"0-0"}}).then(r=>parseInt(r.headers.get("content-range")?.split("/")[1]||"0")),
-    fetch(SB+"/rest/v1/contacts?select=id",{headers:{apikey:AK,Authorization:"Bearer "+AK,Prefer:"count=exact",Range:"0-0"}}).then(r=>parseInt(r.headers.get("content-range")?.split("/")[1]||"0")),
-    fetch(SB+"/rest/v1/properties?select=id",{headers:{apikey:AK,Authorization:"Bearer "+AK,Prefer:"count=exact",Range:"0-0"}}).then(r=>parseInt(r.headers.get("content-range")?.split("/")[1]||"0")),
-    fetch(SB+"/rest/v1/weekly_submissions?select=id",{headers:{apikey:AK,Authorization:"Bearer "+AK,Prefer:"count=exact",Range:"0-0"}}).then(r=>parseInt(r.headers.get("content-range")?.split("/")[1]||"0")),
+    supabase.from("agents").select("id",{count:"exact",head:true}).then(r=>r.count||0),
+    supabase.from("contacts").select("id",{count:"exact",head:true}).then(r=>r.count||0),
+    supabase.from("properties").select("id",{count:"exact",head:true}).then(r=>r.count||0),
+    supabase.from("weekly_submissions").select("id",{count:"exact",head:true}).then(r=>r.count||0),
   ]).then(([agents,contacts,properties,submissions])=>{
     setStats({agents,contacts,properties,submissions});
     setLoading(false);
@@ -112,7 +113,6 @@ return(<div style={{padding:"32px 40px",minHeight:"100vh"}}>
       {l:"Vercel",v:"Production",c:"#22c55e"},
       {l:"Supabase",v:"Connected",c:"#22c55e"},
       {l:"Make.com",v:"Active",c:"#22c55e"},
-      {l:"ML Model",v:"R²=0.93",c:"#f59e0b"},
       {l:"Geocoding",v:"Nominatim",c:"#3b82f6"},
     ].map(s=>(<div key={s.l} style={{display:"flex",alignItems:"center",gap:6}}>
       <div style={{width:6,height:6,borderRadius:"50%",background:s.c,flexShrink:0}}/>

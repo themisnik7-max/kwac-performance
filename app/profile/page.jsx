@@ -1,7 +1,6 @@
 "use client";
 import{useState,useEffect,useRef}from"react";
-const SB="https://yihnycafoaemoambrdfd.supabase.co";
-const AK="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpaG55Y2Fmb2FlbW9hbWJyZGZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NDU2NTQsImV4cCI6MjA5NjQyMTY1NH0.hZVtBbnPEwd_aInDrMiXrLTHSIWlWNimPRfAOC9O66A";
+import{supabase}from"@/lib/supabase";
 const RED="#CC2229";
 
 function Map({properties}){
@@ -39,8 +38,8 @@ function Map({properties}){
 export default function ProfilePage(){
   const[props,setProps]=useState([]);const[loading,setLoading]=useState(true);const[filter,setFilter]=useState("all");const[search,setSearch]=useState("");
   useEffect(()=>{
-    fetch(SB+"/rest/v1/properties?select=*&order=created_at.desc&limit=200",{headers:{apikey:AK,Authorization:"Bearer "+AK}})
-      .then(r=>r.json()).then(d=>{setProps(Array.isArray(d)?d:[]);setLoading(false);}).catch(()=>setLoading(false));
+    supabase.from("properties").select("*").order("created_at",{ascending:false}).limit(200)
+      .then(({data,error})=>{setProps(error?[]:(data||[]));setLoading(false);}).catch(()=>setLoading(false));
   },[]);
 
   const filtered=props.filter(p=>{

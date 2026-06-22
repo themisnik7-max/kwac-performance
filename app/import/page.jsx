@@ -1,18 +1,28 @@
 "use client";
 import{useState,useCallback}from"react";
 import*as XLSX from"xlsx";
-const SB="https://yihnycafoaemoambrdfd.supabase.co";
-const AK="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpaG55Y2Fmb2FlbW9hbWJyZGZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NDU2NTQsImV4cCI6MjA5NjQyMTY1NH0.hZVtBbnPEwd_aInDrMiXrLTHSIWlWNimPRfAOC9O66A";
+import{supabase}from"@/lib/supabase";
+import{useApp}from"@/lib/AppContext";
 const RED="#CC2229";
 function pDate(v){if(!v)return null;if(v instanceof Date)return v.toISOString().split("T")[0];if(typeof v==="number")return new Date(Math.round((v-25569)*86400*1000)).toISOString().split("T")[0];return String(v).split(" ")[0]||null;}
 function iUrl(id){return id?"https://app.i-list.gr/appFol/appDetails/estateDetails/estateDetails.aspx?id="+id:null;}
 function mUrl(a,ar){return"https://www.google.com/maps/search/?api=1&query="+encodeURIComponent([a,ar].filter(Boolean).join(", ")+", Greece");}
 function pRow(row){const flag=String(row[0]??row[1]??"").trim();const id=String(row[2]??"").trim();if(!id||id==="ID"||id==="undefined")return null;const addr=row[11]&&row[11]!=="***"?String(row[11]).trim():null;const rating=parseInt((flag.match(/(\d)/)||[])[1]||"0");return{ilist_id:id,ilist_url:iUrl(id),thumbnail_url:String(row[4]??"").includes("no-photo")?null:"https://app.i-list.gr"+String(row[4]??""),maps_url:mUrl(addr,String(row[8]??"")),approval_flag:flag||null,meeting_rating:rating||null,add_to_meeting:rating>=4,transaction_type:String(row[5]??"").startsWith("Ενοικίαση")?"rental":"sale",property_type:String(row[7]??"").trim()||null,status:String(row[25]??"available").trim(),area:String(row[8]??"").trim()||null,sub_area:String(row[9]??"").trim()||null,postal_code:String(row[10]??"").trim()||null,address:addr,price:parseFloat(row[14])||null,price_per_sqm:parseFloat(row[16])||null,sqm:parseFloat(row[15])||null,bedrooms:parseInt(row[17])||null,floor:String(row[18]??"").trim()||null,year_built:parseInt(row[19])||null,mandate_start:pDate(row[20]),mandate_end:pDate(row[21]),source:String(row[22]??"").trim()||null,agent_name:String(row[23]??"").trim()||null,updated_at:new Date().toISOString()};}
-async function ups(rows){const r=await fetch(SB+"/rest/v1/properties",{method:"POST",headers:{apikey:AK,Authorization:"Bearer "+AK,"Content-Type":"application/json",Prefer:"resolution=merge-duplicates"},body:JSON.stringify(rows)});if(!r.ok)throw new Error(await r.text());}
 export default function ImportPage(){
+const{agent}=useApp();
 const[file,setFile]=useState(null);const[rows,setRows]=useState([]);const[stats,setStats]=useState(null);const[step,setStep]=useState("idle");const[err,setErr]=useState(null);const[pct,setPct]=useState(0);const[fil,setFil]=useState("all");
+// Stamps agency_id (and who imported it) on every row — without this, RLS
+// would reject the insert entirely, and there'd be no way to tell which
+// agency a property belongs to once more than one agency exists.
+const ups=useCallback(async(batch)=>{
+  const stamped=batch.map(r=>({...r,agency_id:agent?.agency_id,imported_by:agent?.id}));
+  const{error}=await supabase.from("properties").upsert(stamped,{onConflict:"ilist_id"});
+  if(error)throw error;
+},[agent]);
 const load=useCallback((f)=>{if(!f)return;setFile(f);setStep("loading");const rd=new FileReader();rd.onload=(e)=>{try{const wb=XLSX.read(e.target.result,{type:"array"});const data=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});const p=data.slice(1).map(pRow).filter(Boolean);setRows(p);setStats({total:p.length,meeting:p.filter(r=>r.add_to_meeting).length,sale:p.filter(r=>r.transaction_type==="sale").length,rental:p.filter(r=>r.transaction_type==="rental").length});setStep("preview");}catch(e){setErr(e.message);setStep("error");}};rd.readAsArrayBuffer(f);},[]);
-const doImp=async()=>{setStep("importing");setPct(0);try{for(let i=0;i<rows.length;i+=50){await ups(rows.slice(i,i+50));setPct(Math.round(((i+Math.min(50,rows.length-i))/rows.length)*100));}setStep("done");}catch(e){setErr(e.message);setStep("error");}};
+const doImp=async()=>{
+  if(!agent){setErr("Χρειάζεται σύνδεση για να γίνει εισαγωγή");setStep("error");return;}
+  setStep("importing");setPct(0);try{for(let i=0;i<rows.length;i+=50){await ups(rows.slice(i,i+50));setPct(Math.round(((i+Math.min(50,rows.length-i))/rows.length)*100));}setStep("done");}catch(e){setErr(e.message);setStep("error");}};
 const reset=()=>{setFile(null);setRows([]);setStats(null);setStep("idle");setErr(null);setPct(0);setFil("all");};
 const vis=fil==="meeting"?rows.filter(r=>r.add_to_meeting):fil==="sale"?rows.filter(r=>r.transaction_type==="sale"):fil==="rental"?rows.filter(r=>r.transaction_type==="rental"):rows;
 const fmt=n=>Math.round(n||0).toLocaleString("el-GR");

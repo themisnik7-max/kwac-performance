@@ -1,14 +1,15 @@
 "use client";
 import{useState}from"react";
-const SB="https://yihnycafoaemoambrdfd.supabase.co";
-const AK="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlpaG55Y2Fmb2FlbW9hbWJyZGZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4NDU2NTQsImV4cCI6MjA5NjQyMTY1NH0.hZVtBbnPEwd_aInDrMiXrLTHSIWlWNimPRfAOC9O66A";
+import{supabase}from"@/lib/supabase";
 const RED="#CC2229";
 const EXPORTS=[{key:"contacts",label:"Επαφές",icon:"◎",desc:"Επαφές με τηλέφωνο, email, πηγή",table:"contacts",order:"created_at"},{key:"properties",label:"Ακίνητα",icon:"⬡",desc:"Ακίνητα από iList",table:"properties",order:"created_at"},{key:"weekly_submissions",label:"Μετρησιμότητα",icon:"✎",desc:"Εβδομαδιαίες καταχωρήσεις",table:"weekly_submissions",order:"week_start"},{key:"email_leads",label:"Email Leads",icon:"✉",desc:"Leads από email",table:"email_leads",order:"created_at"},{key:"sprint_entries",label:"Sprint Calls",icon:"▶",desc:"Καταχωρήσεις sprint",table:"sprint_entries",order:"created_at"}];
 function toCSV(d){if(!d.length)return"";const h=Object.keys(d[0]);const rows=d.map(row=>h.map(k=>{const v=row[k];if(v===null||v===undefined)return"";const s=Array.isArray(v)?v.join(";"):String(v);return s.includes(",")||s.includes('"')||s.includes("\n")?'"'+s.replace(/"/g,'""')+'"':s;}).join(","));return[h.join(","),...rows].join("\n");}
-function dl(csv,name){const b=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=name;a.click();URL.revokeObjectURL(u);}
+function dl(csv,name){const b=new Blob(["﻿"+csv],{type:"text/csv;charset=utf-8;"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=name;a.click();URL.revokeObjectURL(u);}
 export default function ExportPage(){
 const[loading,setLoading]=useState({});const[done,setDone]=useState({});
-const doExp=async(exp)=>{setLoading(l=>({...l,[exp.key]:true}));try{const r=await fetch(SB+"/rest/v1/"+exp.table+"?select=*&order="+exp.order+".desc&limit=10000",{headers:{apikey:AK,Authorization:"Bearer "+AK}});const data=await r.json();dl(toCSV(data),"kwac_"+exp.key+"_"+new Date().toISOString().split("T")[0]+".csv");setDone(d=>({...d,[exp.key]:data.length}));}catch(e){alert(e.message);}setLoading(l=>({...l,[exp.key]:false}));};
+// Uses the shared, session-aware Supabase client — exports respect RLS, so
+// an agent can only ever export their own agency's rows.
+const doExp=async(exp)=>{setLoading(l=>({...l,[exp.key]:true}));try{const{data,error}=await supabase.from(exp.table).select("*").order(exp.order,{ascending:false}).limit(10000);if(error)throw error;dl(toCSV(data||[]),"kwac_"+exp.key+"_"+new Date().toISOString().split("T")[0]+".csv");setDone(d=>({...d,[exp.key]:(data||[]).length}));}catch(e){alert(e.message);}setLoading(l=>({...l,[exp.key]:false}));};
 const doAll=async()=>{for(const e of EXPORTS)await doExp(e);};
 return(<div style={{padding:"32px 40px",minHeight:"100vh"}}>
   <div style={{marginBottom:32,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
