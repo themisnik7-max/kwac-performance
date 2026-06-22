@@ -101,7 +101,7 @@ export default function SubmitPage() {
   const totalXP = Object.entries(vals).reduce((sum, [k, v]) => sum + (XP_MAP[k] || 0) * (v || 0), 0);
 
   useEffect(() => {
-    if (!agent) return;
+    if (!agent) { setLoadingExisting(false); return; }
     authedFetch(`/api/submit?agent_id=${agent.id}&week=${week}&year=${year}`)
       .then(r => r.json())
       .then(({ data }) => {
