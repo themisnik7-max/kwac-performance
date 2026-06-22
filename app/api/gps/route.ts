@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import { getAuthedAgent, canActAs } from '@/lib/auth'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -7,9 +8,16 @@ const supabase = createClient(
 )
 
 export async function GET(req: NextRequest) {
+  const caller = await getAuthedAgent(req)
+  if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+
   const agent_id = req.nextUrl.searchParams.get('agent_id')
-  const { data: goal } = await supabase.from('gps_goals').select('*').eq('agent_id', agent_id).single()
-  
+  if (!agent_id || !canActAs(caller, agent_id)) {
+    return NextResponse.json({ error: 'Δεν μπορείς να δεις τους στόχους άλλου μεσίτη' }, { status: 403 })
+  }
+
+  const { data: goal } = await supabase.from('gps_goals').select('*').eq('agent_id', agent_id).eq('agency_id', caller.agency_id).single()
+
   // Get real conversion rates from last 12 weeks of submissions
   const twelveWeeksAgo = new Date()
   twelveWeeksAgo.setDate(twelveWeeksAgo.getDate() - 84)
@@ -17,6 +25,7 @@ export async function GET(req: NextRequest) {
     .from('weekly_submissions')
     .select('*')
     .eq('agent_id', agent_id)
+    .eq('agency_id', caller.agency_id)
     .gte('week_start', twelveWeeksAgo.toISOString())
     .order('week_start', { ascending: false })
 
@@ -40,10 +49,18 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const caller = await getAuthedAgent(req)
+  if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+
   const body = await req.json()
   const { agent_id, ...rest } = body
+
+  if (!canActAs(caller, agent_id)) {
+    return NextResponse.json({ error: 'Δεν μπορείς να ορίσεις στόχους για άλλον μεσίτη' }, { status: 403 })
+  }
+
   const { data, error } = await supabase.from('gps_goals').upsert(
-    { agent_id, ...rest, updated_at: new Date().toISOString() },
+    { agent_id, agency_id: caller.agency_id, ...rest, updated_at: new Date().toISOString() },
     { onConflict: 'agent_id' }
   ).select().single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

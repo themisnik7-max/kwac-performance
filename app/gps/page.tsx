@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import Shell from '@/components/Shell'
 import { useApp } from '@/lib/AppContext'
+import { authedFetch } from '@/lib/authedFetch'
 
 const PRESETS: Record<string, number[]> = {
   starter: [25000,150000,3.5,8,40,30,60,70,48],
@@ -31,7 +32,7 @@ export default function GPSPage() {
   }, [agent])
 
   async function loadGPS(agentId: string) {
-    const res = await fetch(`/api/gps?agent_id=${agentId}`)
+    const res = await authedFetch(`/api/gps?agent_id=${agentId}`)
     const { goal, realRates: rr } = await res.json()
     if (goal) { setTarget(goal.target_income||50000); setAvgPrice(goal.avg_property_price||200000); setCommRate(goal.commission_rate||4); setSplit(goal.agent_split||70); setWeeks(goal.work_weeks||48) }
     if (rr) { if(rr.cr_call_appt1) setCr1(rr.cr_call_appt1); if(rr.cr_appt1_appt2) setCr2(rr.cr_appt1_appt2); if(rr.cr_appt2_listing) setCr3(rr.cr_appt2_listing); if(rr.cr_listing_deal) setCr4(rr.cr_listing_deal) }
@@ -40,7 +41,7 @@ export default function GPSPage() {
   async function saveGoal() {
     if (!agent) return
     setSaving(true)
-    await fetch('/api/gps', { method: 'POST', headers: {'Content-Type':'application/json'},
+    await authedFetch('/api/gps', { method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ agent_id: agent.id, target_income: target, avg_property_price: avgPrice, commission_rate: commRate, agent_split: split, work_weeks: weeks, cr_call_appt1: cr1, cr_appt1_appt2: cr2, cr_appt2_listing: cr3, cr_listing_deal: cr4 })
     })
     setToast('✅ GPS αποθηκεύτηκε!'); setSaving(false); setTimeout(() => setToast(''), 2500)
