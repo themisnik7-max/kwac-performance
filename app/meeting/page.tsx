@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import Shell from '@/components/Shell'
 import { useApp } from '@/lib/AppContext'
 import { createClient } from '@/lib/supabase'
+import { authedFetch } from '@/lib/authedFetch'
 
 const COND_LABELS: Record<string,string> = {excellent:'Αριστη',good:'Καλη',fair:'Μετρια',needs_work:'Χρειαζεται εργασιες'}
 
@@ -48,7 +49,7 @@ export default function MeetingPage() {
   async function runEstimation() {
     if (!selected) return
     setEstimating(true)
-    const res = await fetch('/api/meeting-valuation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({property_id:selected.id})})
+    const res = await authedFetch('/api/meeting-valuation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({property_id:selected.id})})
     const data = await res.json()
     if (data.success) { setValuation({...data.valuation,top_producers:data.top_producers,comparables:data.comparables}); setToast('✅ Εκτιμηση ολοκληρωθηκε!') }
     else setToast('❌ ' + (data.error||'Σφαλμα'))

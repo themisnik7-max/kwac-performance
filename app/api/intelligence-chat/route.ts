@@ -1,21 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getAuthedAgent } from '@/lib/auth'
+import { getIntelligenceData } from '@/lib/intelligenceData'
 
-const CONTEXT = `Είσαι AI αναλυτής για το μεσιτικό γραφείο KWAC (KW Greece Athens).
-Real data portfolio (213 ενεργά ακίνητα, export i-list Ιούνιος 2026):
-- Σύνολο αξίας: 68.7M ευρώ | Πωλήσεις: 164 (avg 418.895€, median 220.000€) | Ενοικιάσεις: 49 (avg 6.612€/μήνα)
-- Agents: Xenofon Zades 161 ακίνητα (75.6%, portfolio 42.7M€), Katerina Karpouzopoulou 25 (19M€), Themis Nikolaou 15 (4.8M€), Alexandra Georgaki 12 (2M€)
-- Top περιοχές: Εξάρχεια-Νεάπολη 12, Καλλιθέα 10, Κυψέλη 9, Κέντρο 8, Νέα Σμύρνη 7, Νέος Κόσμος 7, Παγκράτι 7
-- Premium €/τμ: Γλυφάδα 5.613, Κέντρο 4.648, Ιστορικό Κέντρο 4.383, Κηφισιά 2.432, Εξάρχεια 2.549
-- Property mix: 59% διαμερίσματα, 9.4% καταστήματα, 8% μονοκατοικίες, 6.1% οικόπεδα, 5.6% γραφεία, 4.7% μεζονέτες
-- Key risk: 75.6% εξάρτηση από τον Xenofon Zades
-- Commission model: 4% αμοιβή γραφείου, 70% split στον agent
-- Potential gross commission αν κλείσουν όλα: 2.75M€
-
-Αναλύεις και απαντάς ΜΟΝΟ βάσει αυτών των δεδομένων. Στα ελληνικά, με αριθμούς, σύντομα και actionable.`
-
+// Was hardcoding one real agency's actual numbers (agent names, revenue,
+// concentration risk) directly into source, reachable with no auth at all.
+// Now builds the system prompt from a live, agency-scoped query each call.
 export async function POST(req: NextRequest) {
+  const caller = await getAuthedAgent(req)
+  if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+
   const { message } = await req.json()
-  
+  const d = await getIntelligenceData(caller.agency_id)
+
+  const context = `Είσαι AI αναλυτής για ένα μεσιτικό γραφείο.
+Τρέχον portfolio: ${d.totals.totalCount} ακίνητα (${d.totals.salesCount} πωλήσεις, ${d.totals.rentalCount} ενοικιάσεις). Συνολική αξία πωλήσεων €${d.totals.portfolioValue.toLocaleString('el-GR')}, μέση τιμή πώλησης €${d.totals.avgSale.toLocaleString('el-GR')}, μέση ενοικίαση €${d.totals.avgRental.toLocaleString('el-GR')}/μήνα.
+Agents: ${d.agents.map(a => `${a.name} (${a.total} ακίνητα, ${a.pct}% του χαρτοφυλακίου)`).join(', ') || 'δεν υπάρχουν καταχωρημένα ακίνητα ακόμα'}.
+Περιοχές: ${d.areas.map(a => `${a.area} (${a.count})`).join(', ') || '—'}.
+Τύποι ακινήτων: ${d.types.map(t => `${t.type} ${t.pct}%`).join(', ') || '—'}.
+Αναλύεις και απαντάς ΜΟΝΟ βάσει αυτών των δεδομένων — μην επικαλεστείς νούμερα που δεν βλέπεις εδώ. Στα ελληνικά, με αριθμούς, σύντομα και actionable.`
+
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -26,7 +29,7 @@ export async function POST(req: NextRequest) {
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 600,
-      system: CONTEXT,
+      system: context,
       messages: [{ role: 'user', content: message }]
     })
   })

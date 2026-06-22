@@ -7,6 +7,15 @@ const supabase = createClient(
 )
 
 export async function GET(req: NextRequest) {
+  // TODO before reselling to a second agency: this assumes a single agency
+  // and a single WordPress source (zadeshome.com via env vars). It also has
+  // no trigger auth at all (anyone who finds the URL can fire it) — fine
+  // for a single trusted agency today, not fine once this is a product with
+  // multiple tenants. Needs either a cron-secret header check or per-agency
+  // WP credentials stored in the agencies table, not env vars.
+  const { data: defaultAgency } = await supabase.from('agencies').select('id').order('created_at').limit(1).single()
+  const agency_id = defaultAgency?.id || null
+
   if (!process.env.ZADESHOME_WP_USER || !process.env.ZADESHOME_WP_APP_PASSWORD) {
     return NextResponse.json({
       success: false,
@@ -43,6 +52,7 @@ export async function GET(req: NextRequest) {
 
       const payload = {
         wp_id: wpId,
+        agency_id,
         title: title.replace(/<[^>]*>/g, ''),
         wp_url: prop.link || null,
         address: meta.fave_property_address || null,

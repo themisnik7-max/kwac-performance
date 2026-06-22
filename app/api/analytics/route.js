@@ -1,20 +1,30 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
+import { getAuthedAgent, isCeoOrAdmin } from '@/lib/auth'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
+// Was using the anon key with no user session attached at all — under RLS
+// that resolves to "no agency", so this route was actually broken (would
+// return empty data) the moment the multi-tenancy RLS went in. Also: per
+// PRODUCT_SPEC.md, aggregate analytics across all agents is CEO/Admin only —
+// that wasn't enforced here before either.
 export async function GET(req) {
+  const caller = await getAuthedAgent(req)
+  if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+  if (!isCeoOrAdmin(caller)) return NextResponse.json({ error: 'Μόνο CEO/Admin βλέπουν συγκεντρωτικά analytics' }, { status: 403 })
+
   const { searchParams } = new URL(req.url)
   const type = searchParams.get('type') || 'summary'
 
   if(type === 'export') {
-    // Full CSV export
     const { data } = await supabase
       .from('weekly_submissions')
       .select('*, agents(full_name, email, team)')
+      .eq('agency_id', caller.agency_id)
       .order('year', {ascending:true})
       .order('week_number', {ascending:true})
 
@@ -35,17 +45,16 @@ export async function GET(req) {
   }
 
   if(type === 'summary') {
-    // Last 12 weeks aggregated
     const { data } = await supabase
       .from('weekly_submissions')
       .select('week_number, year, cold_calls, follow_up, meet1_seller_live, meet2_seller, excl_listing_sale, contract_seller, xp_earned, agent_id')
+      .eq('agency_id', caller.agency_id)
       .order('year', {ascending:false})
       .order('week_number', {ascending:false})
       .limit(600) // 50 agents × 12 weeks
 
     if(!data) return NextResponse.json({summary:[]})
 
-    // Group by week
     const byWeek = {}
     data.forEach(r => {
       const key = r.year+'-W'+r.week_number
@@ -64,10 +73,10 @@ export async function GET(req) {
   }
 
   if(type === 'agents') {
-    // Per-agent stats
     const { data } = await supabase
       .from('weekly_submissions')
       .select('agent_id, cold_calls, follow_up, meet1_seller_live, meet2_seller, excl_listing_sale, contract_seller, xp_earned, week_number, year, agents(full_name, team)')
+      .eq('agency_id', caller.agency_id)
       .order('year', {ascending:false})
       .order('week_number', {ascending:false})
       .limit(1000)
@@ -88,7 +97,6 @@ export async function GET(req) {
       if(r.meet1_seller_live > 0) byAgent[id].conversion.push(r.meet2_seller/r.meet1_seller_live)
     })
 
-    // Calculate rates
     Object.values(byAgent).forEach(a => {
       a.avg_calls = a.weeks ? Math.round(a.calls/a.weeks) : 0
       a.conversion_rate = a.conversion.length ? Math.round(a.conversion.reduce((s,v)=>s+v,0)/a.conversion.length*100) : 0
