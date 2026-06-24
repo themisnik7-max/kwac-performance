@@ -1,205 +1,221 @@
 'use client'
+// app/monitor/page.tsx
+// CEO/Admin only: compliance dashboard — who has profiles, who submitted, meeting props, sprints
+
 import { useState, useEffect } from 'react'
 import Shell from '@/components/Shell'
-import { createClient } from '@/lib/supabase'
+import { useApp } from '@/lib/AppContext'
+import { authedFetch } from '@/lib/authedFetch'
 
-const TAG_COLORS: Record<string, string> = {
-  'sale-rest': '#185FA5',
-  'rent-attica': '#0F6E56',
+type Agent = {
+  id:                  string
+  full_name:           string | null
+  email:               string
+  role:                string
+  joined_at:           string | null
+  has_gps_goal:        boolean
+  submitted_this_week: boolean
+  total_submissions:   number
+  meeting_props_count: number
+  last_sprint_at:      string | null
+  last_submission_at:  string | null
 }
-const TAG_LABELS: Record<string, string> = {
-  'sale-rest': 'Πώληση · Υπόλοιπη Ελλάδα',
-  'rent-attica': 'Ενοικίαση · Αττική',
+
+function Badge({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span style={{
+      display: 'inline-block',
+      padding: '2px 10px', borderRadius: 100, fontSize: 11, fontWeight: 500,
+      background: ok ? '#EAF3DE' : '#FFF5F5',
+      color:      ok ? '#3B6D11'  : '#CC2229',
+    }}>
+      {ok ? '✓' : '✗'} {label}
+    </span>
+  )
+}
+
+function relativeDate(dateStr: string | null) {
+  if (!dateStr) return '—'
+  const d = new Date(dateStr)
+  const diffDays = Math.floor((Date.now() - d.getTime()) / 86400000)
+  if (diffDays === 0) return 'Σήμερα'
+  if (diffDays === 1) return 'Χθες'
+  if (diffDays < 7)  return `${diffDays}μ πριν`
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}εβδ πριν`
+  return `${Math.floor(diffDays / 30)}μήν πριν`
 }
 
 export default function MonitorPage() {
-  const [listings, setListings] = useState<any[]>([])
+  const { role } = useApp()
+  const isCeo = role === 'ceo' || role === 'admin'
+
+  const [agents, setAgents]   = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
-  const [checking, setChecking] = useState(false)
-  const [lastCheck, setLastCheck] = useState<string | null>(null)
-  const [newCount, setNewCount] = useState(0)
-  const [filter, setFilter] = useState<string>('all')
-  const supabase = createClient()
+  const [filter, setFilter]   = useState<'all' | 'missing' | 'ok'>('all')
 
   useEffect(() => {
-    fetchListings()
-  }, [])
+    if (!isCeo) return
+    authedFetch('/api/monitor')
+      .then(r => r.json())
+      .then(d => { setAgents(d.agents || []); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [isCeo])
 
-  async function fetchListings() {
-    setLoading(true)
-    const { data } = await supabase
-      .from('monitored_listings')
-      .select('*')
-      .order('seen_at', { ascending: false })
-      .limit(100)
-    setListings(data || [])
-    setNewCount((data || []).filter(l => l.is_new).length)
-    setLoading(false)
+  if (!isCeo) {
+    return (
+      <Shell>
+        <div style={{ padding: '4rem', textAlign: 'center' }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>🔒</div>
+          <div style={{ fontSize: 16, color: '#888' }}>Η σελίδα αυτή είναι διαθέσιμη μόνο σε CEO / Admin.</div>
+        </div>
+      </Shell>
+    )
   }
 
-  async function checkNow() {
-    setChecking(true)
-    try {
-      const res = await fetch('/api/monitor?manual=1')
-      const data = await res.json()
-      setLastCheck(data.checked_at)
-      if (data.new_count > 0) {
-        await fetchListings()
-      }
-    } catch(e) {}
-    setChecking(false)
+  // ── Summary counts ─────────────────────────────────────────────────────────
+  const total          = agents.length
+  const submitted      = agents.filter(a => a.submitted_this_week).length
+  const hasGPS         = agents.filter(a => a.has_gps_goal).length
+  const hasMeeting     = agents.filter(a => a.meeting_props_count > 0).length
+  const activeLastWeek = agents.filter(a => a.last_sprint_at && new Date(a.last_sprint_at) > new Date(Date.now() - 7 * 86400000)).length
+
+  // ── Score per agent: 0-4 ──────────────────────────────────────────────────
+  function score(a: Agent) {
+    return [a.submitted_this_week, a.has_gps_goal, a.meeting_props_count > 0, !!a.last_sprint_at].filter(Boolean).length
   }
 
-  async function markAllSeen() {
-    await supabase.from('monitored_listings').update({ is_new: false }).eq('is_new', true)
-    setListings(prev => prev.map(l => ({ ...l, is_new: false })))
-    setNewCount(0)
-  }
-
-  const filtered = filter === 'all' ? listings : filter === 'new' ? listings.filter(l => l.is_new) : listings.filter(l => l.tag === filter)
+  const visible = agents
+    .filter(a => {
+      if (filter === 'missing') return score(a) < 3
+      if (filter === 'ok')      return score(a) >= 3
+      return true
+    })
+    .sort((a, b) => score(b) - score(a))
 
   return (
     <Shell>
-      <div style={{ padding: '2rem', maxWidth: 1000 }}>
-        {/* Header */}
+      <div style={{ padding: '2rem', maxWidth: 1100 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <h1 style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', margin: 0 }}>Property Monitor</h1>
-              {newCount > 0 && (
-                <span style={{ background: '#CC2229', color: '#fff', borderRadius: 100, padding: '2px 10px', fontSize: 13, fontWeight: 600 }}>
-                  {newCount} νέα
-                </span>
-              )}
-            </div>
-            <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>
-              Αυτόματη παρακολούθηση νέων ακινήτων από zadeshome.com · κάθε ώρα
-            </p>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {newCount > 0 && (
-              <button onClick={markAllSeen}
-                style={{ padding: '8px 14px', background: 'none', border: '0.5px solid #ddd', borderRadius: 8, fontSize: 13, cursor: 'pointer', color: '#666' }}>
-                Όλα ως διαβασμένα
-              </button>
-            )}
-            <button onClick={checkNow} disabled={checking}
-              style={{ padding: '8px 16px', background: '#CC2229', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer', opacity: checking ? 0.7 : 1 }}>
-              {checking ? '🔄 Έλεγχος...' : '🔍 Έλεγχος τώρα'}
-            </button>
+            <h1 style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', margin: 0 }}>Monitor — Παρακολούθηση Ομάδας</h1>
+            <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>Compliance overview: εβδ. Μετρησιμότητα, GPS, Meeting, Sprint</p>
           </div>
         </div>
 
-        {/* Last check info */}
-        {lastCheck && (
-          <div style={{ background: '#EAF3DE', color: '#3B6D11', padding: '10px 16px', borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
-            ✅ Έλεγχος ολοκληρώθηκε — {new Date(lastCheck).toLocaleTimeString('el-GR', { hour: '2-digit', minute: '2-digit' })}
+        {/* Summary KPIs */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 24 }}>
+          {[
+            { l: 'Σύνολο Μεσιτών', v: total, c: '#1a1a1a' },
+            { l: 'Μετρ. αυτή την εβδ', v: `${submitted}/${total}`, c: submitted === total ? '#3B6D11' : '#CC2229' },
+            { l: 'Έχουν GPS Στόχο', v: `${hasGPS}/${total}`, c: hasGPS === total ? '#3B6D11' : '#BA7517' },
+            { l: 'Ακίνητα σε Meeting', v: `${hasMeeting}/${total}`, c: '#378ADD' },
+            { l: 'Sprint τελ. 7μ.', v: `${activeLastWeek}/${total}`, c: activeLastWeek >= total * 0.7 ? '#3B6D11' : '#CC2229' },
+          ].map(k => (
+            <div key={k.l} style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1rem 1.25rem' }}>
+              <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>{k.l}</div>
+              <div style={{ fontSize: 22, fontWeight: 600, color: k.c }}>{k.v}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Compliance bar */}
+        {total > 0 && (
+          <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1rem 1.25rem', marginBottom: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>Μετρησιμότητα αυτής της εβδομάδας</span>
+              <span style={{ fontSize: 13, color: '#888' }}>{submitted}/{total} μεσίτες</span>
+            </div>
+            <div style={{ background: '#f0f0f0', borderRadius: 100, height: 10, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 100,
+                background: submitted === total ? '#3B6D11' : submitted >= total * 0.7 ? '#BA7517' : '#CC2229',
+                width: `${pct(submitted, total)}%`,
+                transition: 'width .5s ease',
+              }} />
+            </div>
           </div>
         )}
 
-        {/* Stats */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12, marginBottom: 20 }}>
-          {[
-            { l: 'Σύνολο ακινήτων', v: listings.length, c: '#1a1a1a' },
-            { l: 'Νέα (αδιάβαστα)', v: newCount, c: '#CC2229' },
-            { l: 'Πηγές παρακολούθησης', v: 2, c: '#185FA5' },
-          ].map(s => (
-            <div key={s.l} style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1rem' }}>
-              <div style={{ fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 4 }}>{s.l}</div>
-              <div style={{ fontSize: 28, fontWeight: 600, color: s.c }}>{s.v}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Filters */}
-        <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
-          {[
-            { k: 'all', l: 'Όλα' },
-            { k: 'new', l: '🔴 Νέα' },
-            { k: 'sale-rest', l: 'Πώληση · Υπόλοιπη Ελλάδα' },
-            { k: 'rent-attica', l: 'Ενοικίαση · Αττική' },
-          ].map(f => (
-            <button key={f.k} onClick={() => setFilter(f.k)}
-              style={{ padding: '6px 14px', borderRadius: 8, fontSize: 13, cursor: 'pointer',
-                background: filter === f.k ? '#1a1a1a' : '#fff',
-                color: filter === f.k ? '#fff' : '#666',
-                border: filter === f.k ? 'none' : '0.5px solid #e8e8e8' }}>
-              {f.l}
-            </button>
-          ))}
-        </div>
-
-        {/* Listings */}
-        {loading ? (
-          <div style={{ color: '#bbb', fontSize: 14, padding: '2rem 0', textAlign: 'center' }}>Φόρτωση...</div>
-        ) : filtered.length === 0 ? (
-          <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '3rem', textAlign: 'center' }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>🏠</div>
-            <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 6 }}>
-              {listings.length === 0 ? 'Κανένα ακίνητο ακόμα' : 'Κανένα αποτέλεσμα'}
-            </div>
-            <div style={{ fontSize: 13, color: '#888', marginBottom: 16 }}>
-              {listings.length === 0 ? 'Πάτα "Έλεγχος τώρα" για να τραβήξει τα πρώτα ακίνητα από το zadeshome.com' : 'Δοκίμασε διαφορετικό φίλτρο'}
-            </div>
-            {listings.length === 0 && (
-              <button onClick={checkNow} disabled={checking}
-                style={{ padding: '10px 24px', background: '#CC2229', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 500, cursor: 'pointer' }}>
-                {checking ? '🔄 Έλεγχος...' : '🔍 Τράβα ακίνητα τώρα'}
-              </button>
-            )}
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {filtered.map(l => (
-              <div key={l.id} style={{
-                background: l.is_new ? '#fff8f8' : '#fff',
-                border: l.is_new ? '0.5px solid #f5c6c6' : '0.5px solid #e8e8e8',
-                borderRadius: 12, padding: '1rem 1.25rem',
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16
+        {/* Filter tabs */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+          {([
+            { key: 'all',     label: 'Όλοι' },
+            { key: 'missing', label: '⚠️ Ελλιπείς' },
+            { key: 'ok',      label: '✅ Πλήρεις' },
+          ] as const).map(f => (
+            <button key={f.key} onClick={() => setFilter(f.key)}
+              style={{ padding: '6px 14px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                background: filter === f.key ? '#1a1a1a' : '#fff',
+                color: filter === f.key ? '#fff' : '#666',
+                border: filter === f.key ? 'none' : '0.5px solid #e8e8e8',
               }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                    {l.is_new && <span style={{ background: '#CC2229', color: '#fff', fontSize: 10, padding: '2px 7px', borderRadius: 100, fontWeight: 600, flexShrink: 0 }}>ΝΕΟ</span>}
-                    <span style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {l.title || 'Ακίνητο'}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                    <span style={{
-                      background: (TAG_COLORS[l.tag] || '#888') + '18',
-                      color: TAG_COLORS[l.tag] || '#888',
-                      fontSize: 11, padding: '2px 8px', borderRadius: 100
-                    }}>
-                      {TAG_LABELS[l.tag] || l.source_label}
-                    </span>
-                    <span style={{ fontSize: 12, color: '#bbb' }}>
-                      {new Date(l.seen_at).toLocaleDateString('el-GR', { day: 'numeric', month: 'short', year: 'numeric' })}
-                    </span>
-                  </div>
-                </div>
-                <a href={l.url} target="_blank" rel="noopener noreferrer"
-                  style={{ padding: '7px 14px', background: '#f8f8f7', border: '0.5px solid #e8e8e8', borderRadius: 8, fontSize: 13, color: '#1a1a1a', textDecoration: 'none', flexShrink: 0, whiteSpace: 'nowrap' }}>
-                  Δες ακίνητο →
-                </a>
-              </div>
-            ))}
+              {f.label} {f.key === 'all' ? `(${total})` : f.key === 'missing' ? `(${agents.filter(a => score(a) < 3).length})` : `(${agents.filter(a => score(a) >= 3).length})`}
+            </button>
+          ))}
+        </div>
+
+        {/* Agent table */}
+        {loading ? (
+          <div style={{ padding: '3rem', textAlign: 'center', color: '#bbb' }}>Φόρτωση...</div>
+        ) : (
+          <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: '#F8F8F7', borderBottom: '1px solid #F0F0F0' }}>
+                  {['Μεσίτης', 'Μετρ. εβδ.', 'GPS Στόχος', 'Meeting Ακινήτων', 'Τελ. Sprint', 'Τελ. Υποβολή', 'Score'].map(h => (
+                    <th key={h} style={{ textAlign: 'left', padding: '10px 12px', fontWeight: 500, color: '#888', fontSize: 12 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visible.length === 0 && (
+                  <tr><td colSpan={7} style={{ padding: '2rem', textAlign: 'center', color: '#bbb' }}>Δεν υπάρχουν αποτελέσματα.</td></tr>
+                )}
+                {visible.map(a => {
+                  const sc = score(a)
+                  return (
+                    <tr key={a.id} style={{ borderBottom: '0.5px solid #F8F8F8' }}>
+                      <td style={{ padding: '12px' }}>
+                        <div style={{ fontWeight: 500 }}>{a.full_name || '—'}</div>
+                        <div style={{ fontSize: 11, color: '#aaa' }}>{a.email}</div>
+                      </td>
+                      <td style={{ padding: '12px' }}><Badge ok={a.submitted_this_week} label={a.submitted_this_week ? 'Υπεβλήθη' : 'Εκκρεμεί'} /></td>
+                      <td style={{ padding: '12px' }}><Badge ok={a.has_gps_goal} label={a.has_gps_goal ? 'Ορίστηκε' : 'Λείπει'} /></td>
+                      <td style={{ padding: '12px' }}>
+                        {a.meeting_props_count > 0
+                          ? <span style={{ color: '#3B6D11', fontWeight: 500 }}>{a.meeting_props_count} ακίνητα</span>
+                          : <span style={{ color: '#CC2229' }}>Κανένα</span>}
+                      </td>
+                      <td style={{ padding: '12px', color: '#888' }}>{relativeDate(a.last_sprint_at)}</td>
+                      <td style={{ padding: '12px', color: '#888' }}>
+                        <div>{relativeDate(a.last_submission_at)}</div>
+                        <div style={{ fontSize: 11, color: '#ccc' }}>{a.total_submissions} συνολικά</div>
+                      </td>
+                      <td style={{ padding: '12px' }}>
+                        <div style={{
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          width: 28, height: 28, borderRadius: '50%',
+                          background: sc === 4 ? '#EAF3DE' : sc >= 2 ? '#FFF8E6' : '#FFF5F5',
+                          color:      sc === 4 ? '#3B6D11'  : sc >= 2 ? '#BA7517'  : '#CC2229',
+                          fontWeight: 700, fontSize: 13,
+                        }}>
+                          {sc}
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         )}
 
-        {/* Monitored URLs */}
-        <div style={{ marginTop: 24, background: '#f8f8f7', borderRadius: 12, padding: '1rem 1.25rem' }}>
-          <div style={{ fontSize: 12, color: '#888', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Παρακολουθούμενες πηγές</div>
-          {[
-            { l: 'Πωλήσεις - Υπόλοιπη Ελλάδα', url: 'https://www.zadeshome.com/search-results/?status[]=agora-akinitou&states[]=ypoloipi-ellada' },
-            { l: 'Ενοικιάσεις - Αττική', url: 'https://www.zadeshome.com/search-results/?status[]=enoikiasi-akinitou&states[]=attiki' },
-          ].map(s => (
-            <div key={s.url} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '0.5px solid #eee' }}>
-              <span style={{ fontSize: 13, color: '#555' }}>🔗 {s.l}</span>
-              <a href={s.url} target="_blank" style={{ fontSize: 12, color: '#888' }}>zadeshome.com ↗</a>
-            </div>
-          ))}
+        <div style={{ marginTop: 16, fontSize: 11, color: '#ccc' }}>
+          Score = Μετρησιμότητα + GPS + Meeting + Sprint (max 4) · Ανανεώνεται real-time
         </div>
       </div>
     </Shell>
   )
 }
+
+function pct(a: number, b: number) { return b > 0 ? Math.round((a / b) * 100) : 0 }
