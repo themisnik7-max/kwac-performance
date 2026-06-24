@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
+import MarketingKitPanel from '@/components/MarketingKitPanel'
 
 const C = {red:'#CC2229',dark:'#1A1A1A',muted:'#6B7280',border:'#EBEBEB',subtle:'#F7F7F7',white:'#FFFFFF',green:'#16A34A',greenLight:'#F0FDF4',amber:'#D97706',blue:'#2563EB'}
 const PHASES = [{id:'listing',label:'Ανάθεση',icon:'📋'},{id:'marketing',label:'Εμπορία',icon:'📣'},{id:'closing',label:'Κλείσιμο',icon:'✅'}]
@@ -188,7 +189,8 @@ export default function PropertyFilePage({params}){
             </div>
           )}
 
-          {phase==='marketing'&&(
+          {phase==='marketing'&&(<>
+            <MarketingKitPanel prop={prop} user={user} />
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
               <div>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
@@ -247,6 +249,7 @@ export default function PropertyFilePage({params}){
                 ))}
               </div>
             </div>
+          </>
           )}
 
           {phase==='closing'&&(
