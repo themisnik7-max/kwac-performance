@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useApp } from '@/lib/AppContext'
 import { authedFetch } from '@/lib/authedFetch'
+import QuickLinks from '@/components/QuickLinks'
 
 const RED = '#CC2229'
 
@@ -268,6 +269,9 @@ export default function Dashboard() {
         <MetricCard label="Ακίνητα"          value={statsLoading ? '—' : stats.properties.toLocaleString()} sub="Καταχωρημένα" />
         <MetricCard label="Ενεργά μου"       value={propsLoading ? '—' : myProps.length}                 sub="Σε εξέλιξη" />
       </div>
+
+      {/* ── Quick-access external shortcuts ── */}
+      <QuickLinks />
 
       {/* ── Main 3-column grid ── */}
       <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr 300px', gap: 16, marginBottom: 16 }}>
