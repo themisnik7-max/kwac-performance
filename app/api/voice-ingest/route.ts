@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse }                                    from 'next/server'
 import { createClient }                                                  from '@supabase/supabase-js'
-import { whisperTranscribe }                                             from '@/lib/voice/cloudflare-ai'
 import { detectIntent, extractPropertyScouted, extractDemandProfile }   from '@/lib/voice/extractors'
 
 const SUPABASE_URL      = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 const SERVICE_ROLE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-const MAX_AUDIO_MB = 24
 
 async function resolveUser(token: string) {
   const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -22,6 +19,8 @@ const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
   db: { schema: 'public' },
 })
 
+// Accepts JSON body: { transcript, lead_id?, property_id?, meeting_id? }
+// The transcript has already been reviewed/corrected by the agent.
 export async function POST(req: NextRequest) {
 
   // 1. Auth
@@ -29,7 +28,6 @@ export async function POST(req: NextRequest) {
   const user  = await resolveUser(token)
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Resolve agency_id from the agents table
   const { data: agentRow } = await db
     .from('agents')
     .select('agency_id')
@@ -41,44 +39,29 @@ export async function POST(req: NextRequest) {
 
   const agencyId = agentRow.agency_id
 
-  // 2. Parse form
-  const form       = await req.formData()
-  const audioBlob  = form.get('audio')       as Blob | null
-  const leadId     = form.get('lead_id')     as string | null
-  const propertyId = form.get('property_id') as string | null
-  const meetingId  = form.get('meeting_id')  as string | null
-
-  if (!audioBlob)
-    return NextResponse.json({ error: 'No audio' }, { status: 400 })
-  if (audioBlob.size > MAX_AUDIO_MB * 1024 * 1024)
-    return NextResponse.json({ error: `Audio exceeds ${MAX_AUDIO_MB}MB` }, { status: 413 })
-
-  // 3. Transcription
-  let transcript: string
-  try {
-    transcript = await whisperTranscribe(audioBlob)
-  } catch (err) {
-    console.error('[voice-ingest] whisper failed', err)
-    return NextResponse.json({ error: 'Transcription service unavailable' }, { status: 503 })
-  }
+  // 2. Parse body — transcript comes in as reviewed text
+  const body       = await req.json()
+  const transcript = (body.transcript as string | undefined)?.trim()
+  const leadId     = body.lead_id     as string | null | undefined
+  const propertyId = body.property_id as string | null | undefined
+  const meetingId  = body.meeting_id  as string | null | undefined
 
   if (!transcript)
-    return NextResponse.json({ error: 'Empty transcript' }, { status: 422 })
+    return NextResponse.json({ error: 'No transcript' }, { status: 400 })
 
-  // 4. Intent
+  // 3. Intent
   const intent = detectIntent(transcript)
 
-  // 5. Extraction
+  // 4. Extraction
   let extracted: Record<string, unknown> = {}
   try {
     if      (intent === 'property_scouted') extracted = await extractPropertyScouted(transcript)
     else if (intent === 'demand_profile')   extracted = await extractDemandProfile(transcript)
   } catch (err) {
     console.error('[voice-ingest] extraction failed', err)
-    // Non-fatal: store transcript anyway
   }
 
-  // 6. Append to voice_notes (audit log)
+  // 5. Audit log
   const { data: note, error: noteErr } = await db
     .from('voice_notes')
     .insert({
@@ -89,7 +72,6 @@ export async function POST(req: NextRequest) {
       meeting_id:  meetingId  ?? null,
       transcript,
       extracted:   { intent, ...extracted },
-      audio_sec:   Math.round(audioBlob.size / 16000),
     })
     .select('id')
     .single()
@@ -99,7 +81,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'DB error' }, { status: 500 })
   }
 
-  // 7. Upsert profile (dedup on phone)
+  // 6. Upsert profile
   if (intent === 'property_scouted') {
     const phone = extracted.owner_phone as string | null
 
