@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS public.voice_notes (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   agency_id    UUID        NOT NULL REFERENCES public.agencies(id) ON DELETE CASCADE,
   agent_id     UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  lead_id      UUID,
+  lead_id      UUID,   -- FK to leads added when that table is confirmed to exist
   property_id  UUID,
   meeting_id   UUID,
   transcript   TEXT        NOT NULL,
@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS public.demand_profiles (
   id                UUID      PRIMARY KEY DEFAULT gen_random_uuid(),
   agency_id         UUID      NOT NULL REFERENCES public.agencies(id) ON DELETE CASCADE,
   agent_id          UUID      NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  lead_id           UUID,
+  lead_id           UUID,   -- FK to leads added when that table is confirmed to exist
 
   client_name       TEXT,
   client_phone      TEXT,
