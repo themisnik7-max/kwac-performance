@@ -34,7 +34,7 @@ export async function whisperTranscribe(audioBlob: Blob): Promise<string> {
         Authorization:  `Bearer ${process.env.CF_AI_TOKEN?.trim()}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ audio: audioArray }),
+      body: JSON.stringify({ audio: audioArray, language: 'el' }),
     })
 
     if (res.status === 429) throw new Error('429')

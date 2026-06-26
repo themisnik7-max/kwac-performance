@@ -28,16 +28,18 @@ export async function POST(req: NextRequest) {
   const user  = await resolveUser(token)
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data: agentRow } = await db
-    .from('agents')
-    .select('agency_id')
-    .eq('id', user.id)
-    .single()
+  // Resolve agency_id: from agents table, or fall back to the single agency that exists
+  let agencyId: string | null = null
+  const { data: agentRow } = await db.from('agents').select('agency_id').eq('id', user.id).single()
+  if (agentRow?.agency_id) {
+    agencyId = agentRow.agency_id
+  } else {
+    const { data: agency } = await db.from('agencies').select('id').order('created_at').limit(1).single()
+    agencyId = agency?.id ?? null
+  }
 
-  if (!agentRow?.agency_id)
-    return NextResponse.json({ error: 'Agent not found' }, { status: 403 })
-
-  const agencyId = agentRow.agency_id
+  if (!agencyId)
+    return NextResponse.json({ error: 'No agency configured' }, { status: 403 })
 
   // 2. Parse body — transcript comes in as reviewed text
   const body       = await req.json()
