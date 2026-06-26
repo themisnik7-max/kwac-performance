@@ -24,29 +24,23 @@ async function retryWithBackoff<T>(fn: () => Promise<T>, maxRetries = 3): Promis
 
 export async function whisperTranscribe(audioBlob: Blob): Promise<string> {
   return retryWithBackoff(async () => {
-    // Node.js fetch (undici) has issues with Blob inside FormData.
-    // Manually construct the multipart body using Buffers to avoid TypeError.
-    const audioBuffer = Buffer.from(await audioBlob.arrayBuffer())
-    const boundary    = `--CF${Date.now()}`
-    const header = Buffer.from(
-      `--${boundary}\r\nContent-Disposition: form-data; name="audio"; filename="audio.webm"\r\nContent-Type: audio/webm\r\n\r\n`
-    )
-    const footer = Buffer.from(`\r\n--${boundary}--\r\n`)
-    const body   = Buffer.concat([header, audioBuffer, footer])
+    // CF Workers AI Whisper REST API expects { audio: uint8array }
+    const audioBuffer = await audioBlob.arrayBuffer()
+    const audioArray  = Array.from(new Uint8Array(audioBuffer))
 
     const res = await fetch(CF_MODELS.whisper, {
       method:  'POST',
       headers: {
         Authorization:  `Bearer ${process.env.CF_AI_TOKEN?.trim()}`,
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Type': 'application/json',
       },
-      body,
+      body: JSON.stringify({ audio: audioArray }),
     })
 
     if (res.status === 429) throw new Error('429')
     if (!res.ok) {
       const errText = await res.text().catch(() => '')
-      throw new Error(`Whisper error ${res.status}: ${errText.slice(0, 200)}`)
+      throw new Error(`Whisper ${res.status}: ${errText.slice(0, 300)}`)
     }
 
     const data = await res.json()

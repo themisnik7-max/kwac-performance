@@ -23,8 +23,8 @@ export async function POST(req: NextRequest) {
   const form      = await req.formData()
   const audioBlob = form.get('audio') as Blob | null
 
-  if (!audioBlob)
-    return NextResponse.json({ error: 'No audio' }, { status: 400 })
+  if (!audioBlob || audioBlob.size === 0)
+    return NextResponse.json({ error: 'No audio received' }, { status: 400 })
   if (audioBlob.size > MAX_AUDIO_MB * 1024 * 1024)
     return NextResponse.json({ error: `Audio exceeds ${MAX_AUDIO_MB}MB` }, { status: 413 })
 
@@ -34,7 +34,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Empty transcript' }, { status: 422 })
     return NextResponse.json({ transcript })
   } catch (err) {
-    console.error('[voice-transcribe]', err)
-    return NextResponse.json({ error: 'Transcription service unavailable' }, { status: 503 })
+    // Pass real error to client so debugging is visible
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[voice-transcribe]', msg)
+    return NextResponse.json({ error: msg }, { status: 503 })
   }
 }
