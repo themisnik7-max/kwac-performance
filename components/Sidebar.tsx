@@ -13,8 +13,9 @@ const AGENT_LINKS = [
   { href: "/profile",      icon: "◎", label: "Χάρτης" },
   { href: "/sprint",       icon: "▶", label: "Sprint Calls" },
   { href: "/board",        icon: "◈", label: "Ανακοινώσεις" },
-  { href: "/gps",          icon: "◉", label: "GPS Goals" },
-  { href: "/export",       icon: "↓", label: "Export" },
+  { href: "/gps",            icon: "◉", label: "GPS Goals" },
+  { href: "/personal-admin", icon: "🎙", label: "Personal Admin" },
+  { href: "/export",         icon: "↓", label: "Export" },
 ];
 
 const CEO_LINKS = [
