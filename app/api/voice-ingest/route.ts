@@ -12,10 +12,10 @@ async function resolveUser(token: string) {
   return user
 }
 
-const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { db: { schema: 'public' } })
+const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
 // Body: { transcript, intent, fields, lead_id?, property_id?, meeting_id? }
-// Fields are already reviewed & corrected by the agent — no LLM call here.
+// All path now writes to meeting_properties — the single unified property table.
 export async function POST(req: NextRequest) {
 
   // 1. Auth
@@ -45,7 +45,7 @@ export async function POST(req: NextRequest) {
 
   if (!transcript) return NextResponse.json({ error: 'No transcript' }, { status: 400 })
 
-  // 4. Audit log
+  // 4. Audit log in voice_notes
   const { data: note, error: noteErr } = await db
     .from('voice_notes')
     .insert({
@@ -65,89 +65,148 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `DB error: ${noteErr.message}` }, { status: 500 })
   }
 
-  // 5. Upsert profile
+  // 5. Write to unified meeting_properties
+  let upsertedId: string | null = null
+
   if (intent === 'property_scouted') {
     const phone = fields.owner_phone as string | null
 
-    const { error: upsertErr } = await db.from('property_scouted').upsert(
-      {
-        agency_id:         agencyId,
-        agent_id:          user.id,
-        raw_transcript:    transcript,
-        owner_phone:       phone,
-        owner_email:       fields.owner_email       ?? null,
-        owner_name:        fields.owner_name        ?? null,
-        transaction_type:  fields.transaction_type  ?? null,
-        address:           fields.address           ?? null,
-        area:              fields.area              ?? null,
-        floor:             fields.floor             ?? null,
-        size_sqm:          fields.size_sqm          ?? null,
-        condition:         fields.condition         ?? null,
-        year_built:        fields.year_built        ?? null,
-        year_renovated:    fields.year_renovated    ?? null,
-        rooms:             fields.rooms             ?? null,
-        balcony:           fields.balcony           ?? null,
-        parking:           fields.parking           ?? null,
-        security_door:     fields.security_door     ?? null,
-        asking_price:      fields.asking_price      ?? null,
-        seller_motivation: fields.seller_motivation ?? null,
-        seller_reason:     fields.seller_reason     ?? null,
-        ai_summary:        fields.ai_summary        ?? null,
-        features:          {},
-      },
-      { onConflict: 'agent_id,owner_phone', ignoreDuplicates: false }
-    )
-
-    if (upsertErr) console.error('[voice-ingest] property_scouted upsert', upsertErr)
-
+    // Try to find existing record by agent + phone to avoid duplicates
+    let existingId: string | null = null
     if (phone) {
-      await db.rpc('append_voice_note_to_scouted', {
-        p_agent_id: user.id, p_phone: phone, p_note_id: note.id,
-      })
+      const { data: ex } = await db
+        .from('meeting_properties')
+        .select('id')
+        .eq('agent_id', user.id)
+        .eq('owner_phone', phone)
+        .single()
+      existingId = ex?.id ?? null
+    }
+
+    // Link owner to contacts table if phone matches
+    let ownerContactId: string | null = null
+    if (phone && agencyId) {
+      const { data: contact } = await db
+        .from('contacts')
+        .select('id')
+        .eq('agency_id', agencyId)
+        .or(`phone.eq.${phone},phone2.eq.${phone}`)
+        .limit(1)
+        .single()
+      ownerContactId = contact?.id ?? null
+    }
+
+    const payload = {
+      agency_id:         agencyId,
+      agent_id:          user.id,
+      raw_transcript:    transcript,
+      owner_phone:       phone,
+      owner_email:       (fields.owner_email       as string) ?? null,
+      owner_name:        (fields.owner_name        as string) ?? null,
+      owner_contact_id:  ownerContactId,
+      transaction_type:  (fields.transaction_type  as string) ?? null,
+      address:           (fields.address           as string) ?? null,
+      area:              (fields.area              as string) ?? null,
+      floor:             (fields.floor             as number) ?? null,
+      sqm:               (fields.size_sqm          as number) ?? null,
+      condition:         (fields.condition         as string) ?? null,
+      year_built:        (fields.year_built        as number) ?? null,
+      year_renovated:    (fields.year_renovated    as number) ?? null,
+      rooms:             (fields.rooms             as number) ?? null,
+      balcony:           (fields.balcony           as boolean) ?? null,
+      parking:           (fields.parking           as boolean) ?? null,
+      security_door:     (fields.security_door     as boolean) ?? null,
+      asking_price:      (fields.asking_price      as number) ?? null,
+      seller_motivation: (fields.seller_motivation as string) ?? null,
+      seller_reason:     (fields.seller_reason     as string) ?? null,
+      ai_summary:        (fields.ai_summary        as string) ?? null,
+      title:             (fields.address as string) || (fields.area as string) || 'Νέο Ακίνητο',
+      status:            'pending',
+      meeting_date:      new Date().toISOString().split('T')[0],
+      first_registered_by: user.id,
+    }
+
+    if (existingId) {
+      // Update existing — don't overwrite agent_id or first_registered_by
+      const { error: updErr } = await db
+        .from('meeting_properties')
+        .update({ ...payload, first_registered_by: undefined })
+        .eq('id', existingId)
+      if (updErr) console.error('[voice-ingest] mp update', updErr)
+      upsertedId = existingId
+
+      // Append voice note
+      await db.rpc('append_voice_note_to_property', { p_property_id: existingId, p_note_id: note.id })
+    } else {
+      const { data: mp, error: insErr } = await db
+        .from('meeting_properties')
+        .insert({ ...payload, ilist_id: 'VOC-' + Date.now() })
+        .select('id')
+        .single()
+      if (insErr) console.error('[voice-ingest] mp insert', insErr)
+      upsertedId = mp?.id ?? null
+
+      if (upsertedId) {
+        await db.rpc('append_voice_note_to_property', { p_property_id: upsertedId, p_note_id: note.id })
+      }
     }
   }
 
   if (intent === 'demand_profile') {
     const phone = fields.client_phone as string | null
 
-    const { error: upsertErr } = await db.from('demand_profiles').upsert(
-      {
-        agency_id:        agencyId,
-        agent_id:         user.id,
-        lead_id:          leadId ?? null,
-        raw_transcript:   transcript,
-        client_name:      fields.client_name      ?? null,
-        client_phone:     phone,
-        client_email:     fields.client_email     ?? null,
-        transaction_type: fields.transaction_type ?? null,
-        property_type:    fields.property_type    ?? null,
-        floor_min:        fields.floor_min        ?? null,
-        floor_max:        fields.floor_max        ?? null,
-        size_min:         fields.size_min         ?? null,
-        size_max:         fields.size_max         ?? null,
-        budget_eur:       fields.budget_eur       ?? null,
-        condition_req:    fields.condition_req    ?? null,
-        must_have:        fields.must_have        ?? [],
-        nice_to_have:     fields.nice_to_have     ?? [],
-        areas_preferred:  fields.areas_preferred  ?? [],
-        ai_summary:       fields.ai_summary       ?? null,
-      },
-      { onConflict: 'agent_id,client_phone', ignoreDuplicates: false }
-    )
-
-    if (upsertErr) console.error('[voice-ingest] demand_profiles upsert', upsertErr)
-
+    // Check for existing demand by agent + phone
+    let existingId: string | null = null
     if (phone) {
-      await db.rpc('append_voice_note_to_demand', {
-        p_agent_id: user.id, p_phone: phone, p_note_id: note.id,
-      })
+      const { data: ex } = await db
+        .from('demand_profiles')
+        .select('id')
+        .eq('agent_id', user.id)
+        .eq('client_phone', phone)
+        .single()
+      existingId = ex?.id ?? null
+    }
+
+    const payload = {
+      agency_id:        agencyId,
+      agent_id:         user.id,
+      lead_id:          leadId ?? null,
+      raw_transcript:   transcript,
+      client_name:      (fields.client_name      as string)   ?? null,
+      client_phone:     phone,
+      client_email:     (fields.client_email     as string)   ?? null,
+      transaction_type: (fields.transaction_type as string)   ?? null,
+      property_type:    (fields.property_type    as string)   ?? null,
+      floor_min:        (fields.floor_min        as number)   ?? null,
+      floor_max:        (fields.floor_max        as number)   ?? null,
+      size_min:         (fields.size_min         as number)   ?? null,
+      size_max:         (fields.size_max         as number)   ?? null,
+      budget_eur:       (fields.budget_eur       as number)   ?? null,
+      condition_req:    (fields.condition_req    as string)   ?? null,
+      must_have:        (fields.must_have        as string[]) ?? [],
+      nice_to_have:     (fields.nice_to_have     as string[]) ?? [],
+      areas_preferred:  (fields.areas_preferred  as string[]) ?? [],
+      ai_summary:       (fields.ai_summary       as string)   ?? null,
+    }
+
+    if (existingId) {
+      await db.from('demand_profiles').update(payload).eq('id', existingId)
+      await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
+    } else {
+      const { data: dp } = await db.from('demand_profiles')
+        .insert({ ...payload, status: 'active' })
+        .select('id').single()
+      if (dp?.id && phone) {
+        await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
+      }
     }
   }
 
   return NextResponse.json({
-    ok:      true,
+    ok:          true,
     intent,
-    note_id: note.id,
-    summary: (fields.ai_summary as string) ?? transcript.slice(0, 120),
+    note_id:     note.id,
+    property_id: upsertedId,
+    summary:     (fields.ai_summary as string) ?? transcript.slice(0, 120),
   })
 }
