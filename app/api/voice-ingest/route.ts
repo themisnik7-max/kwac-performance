@@ -189,6 +189,7 @@ export async function POST(req: NextRequest) {
       ai_summary:       (fields.ai_summary       as string)   ?? null,
     }
 
+    let demandId: string | null = existingId
     if (existingId) {
       await db.from('demand_profiles').update(payload).eq('id', existingId)
       await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
@@ -196,9 +197,22 @@ export async function POST(req: NextRequest) {
       const { data: dp } = await db.from('demand_profiles')
         .insert({ ...payload, status: 'active' })
         .select('id').single()
+      demandId = dp?.id ?? null
       if (dp?.id && phone) {
         await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
       }
+    }
+
+    // Fire-and-forget auto-match (non-blocking — client gets response immediately)
+    if (demandId) {
+      const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.VERCEL_URL
+        ? `https://${process.env.VERCEL_URL}`
+        : 'http://localhost:3000'
+      fetch(`${baseUrl}/api/demand-match`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ demand_id: demandId }),
+      }).catch(err => console.error('[voice-ingest] demand-match trigger', err))
     }
   }
 

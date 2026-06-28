@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient }                      from '@supabase/supabase-js'
 import { VoiceMemoButton }                   from '@/components/VoiceMemoButton'
 import { PropertyPhotoUpload }               from '@/components/PropertyPhotoUpload'
+import { PropertyDocUpload }                from '@/components/PropertyDocUpload'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -144,6 +145,7 @@ function EditInput({ label, k, type, state, onChange }: {
 function PropertyCard({ row, onSaved }: { row: PropertyRow; onSaved: () => void }) {
   const [editing,      setEditing]      = useState(false)
   const [showPhotos,   setShowPhotos]   = useState(false)
+  const [showDocs,     setShowDocs]     = useState(false)
   const [state,        setState]        = useState<EditState>({})
   const [saving,       setSaving]       = useState(false)
   const [err,          setErr]          = useState<string | null>(null)
@@ -174,7 +176,10 @@ function PropertyCard({ row, onSaved }: { row: PropertyRow; onSaved: () => void 
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <StatusBadge s={row.status} />
         <button onClick={() => setShowPhotos(p => !p)} style={{ padding: '3px 9px', fontSize: 11, background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 4, color: '#888', cursor: 'pointer' }}>
-          📷 {showPhotos ? 'Κλείσιμο' : 'Φωτογραφίες'}
+          📷 {showPhotos ? 'Κλείσιμο' : 'Φωτ.'}
+        </button>
+        <button onClick={() => setShowDocs(p => !p)} style={{ padding: '3px 9px', fontSize: 11, background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 4, color: '#888', cursor: 'pointer' }}>
+          📁 {showDocs ? 'Κλείσιμο' : 'Φάκελος'}
         </button>
         {!editing && <button onClick={startEdit} style={{ padding: '3px 9px', fontSize: 11, background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 4, color: '#888', cursor: 'pointer' }}>✏ Επεξ.</button>}
       </div>
@@ -215,6 +220,7 @@ function PropertyCard({ row, onSaved }: { row: PropertyRow; onSaved: () => void 
           <button onClick={cancel} disabled={saving} style={{ padding: '7px 12px', background: '#1e1e1e', color: '#888', border: '1px solid #2a2a2a', borderRadius: 5, fontSize: 13, cursor: 'pointer' }}>Ακύρωση</button>
         </div>
         {showPhotos && <PropertyPhotoUpload propertyId={row.id} />}
+        {showDocs   && <PropertyDocUpload   propertyId={row.id} />}
       </div>
     )
   }
@@ -241,6 +247,7 @@ function PropertyCard({ row, onSaved }: { row: PropertyRow; onSaved: () => void 
         {new Date(row.created_at).toLocaleDateString('el-GR')}
       </p>
       {showPhotos && <PropertyPhotoUpload propertyId={row.id} />}
+      {showDocs   && <PropertyDocUpload   propertyId={row.id} />}
     </div>
   )
 }
