@@ -1,26 +1,21 @@
-import { NextRequest, NextResponse }                                    from 'next/server'
-import { createClient }                                                  from '@supabase/supabase-js'
-import { detectIntent, extractPropertyScouted, extractDemandProfile }   from '@/lib/voice/extractors'
+import { NextRequest, NextResponse } from 'next/server'
+import { createClient }              from '@supabase/supabase-js'
 
-const SUPABASE_URL      = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-const SERVICE_ROLE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const SUPABASE_URL     = process.env.NEXT_PUBLIC_SUPABASE_URL!
+const SUPABASE_ANON    = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 async function resolveUser(token: string) {
-  const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: { persistSession: false },
-  })
-  const { data: { user }, error } = await client.auth.getUser(token)
+  const c = createClient(SUPABASE_URL, SUPABASE_ANON, { auth: { persistSession: false } })
+  const { data: { user }, error } = await c.auth.getUser(token)
   if (error || !user) return null
   return user
 }
 
-const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-  db: { schema: 'public' },
-})
+const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { db: { schema: 'public' } })
 
-// Accepts JSON body: { transcript, lead_id?, property_id?, meeting_id? }
-// The transcript has already been reviewed/corrected by the agent.
+// Body: { transcript, intent, fields, lead_id?, property_id?, meeting_id? }
+// Fields are already reviewed & corrected by the agent — no LLM call here.
 export async function POST(req: NextRequest) {
 
   // 1. Auth
@@ -28,7 +23,7 @@ export async function POST(req: NextRequest) {
   const user  = await resolveUser(token)
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  // Resolve agency_id: from agents table, or fall back to the single agency that exists
+  // 2. Resolve agency_id
   let agencyId: string | null = null
   const { data: agentRow } = await db.from('agents').select('agency_id').eq('id', user.id).single()
   if (agentRow?.agency_id) {
@@ -37,33 +32,20 @@ export async function POST(req: NextRequest) {
     const { data: agency } = await db.from('agencies').select('id').order('created_at').limit(1).single()
     agencyId = agency?.id ?? null
   }
+  if (!agencyId) return NextResponse.json({ error: 'No agency configured' }, { status: 403 })
 
-  if (!agencyId)
-    return NextResponse.json({ error: 'No agency configured' }, { status: 403 })
-
-  // 2. Parse body — transcript comes in as reviewed text
+  // 3. Parse body
   const body       = await req.json()
   const transcript = (body.transcript as string | undefined)?.trim()
-  const leadId     = body.lead_id     as string | null | undefined
+  const intent     = body.intent     as string | undefined
+  const fields     = (body.fields    as Record<string, unknown>) ?? {}
+  const leadId     = body.lead_id    as string | null | undefined
   const propertyId = body.property_id as string | null | undefined
   const meetingId  = body.meeting_id  as string | null | undefined
 
-  if (!transcript)
-    return NextResponse.json({ error: 'No transcript' }, { status: 400 })
+  if (!transcript) return NextResponse.json({ error: 'No transcript' }, { status: 400 })
 
-  // 3. Intent
-  const intent = detectIntent(transcript)
-
-  // 4. Extraction
-  let extracted: Record<string, unknown> = {}
-  try {
-    if      (intent === 'property_scouted') extracted = await extractPropertyScouted(transcript)
-    else if (intent === 'demand_profile')   extracted = await extractDemandProfile(transcript)
-  } catch (err) {
-    console.error('[voice-ingest] extraction failed', err)
-  }
-
-  // 5. Audit log
+  // 4. Audit log
   const { data: note, error: noteErr } = await db
     .from('voice_notes')
     .insert({
@@ -73,98 +55,99 @@ export async function POST(req: NextRequest) {
       property_id: propertyId ?? null,
       meeting_id:  meetingId  ?? null,
       transcript,
-      extracted:   { intent, ...extracted },
+      extracted:   { intent, ...fields },
     })
     .select('id')
     .single()
 
   if (noteErr) {
     console.error('[voice-ingest] voice_notes insert', noteErr)
-    return NextResponse.json({ error: 'DB error' }, { status: 500 })
+    return NextResponse.json({ error: `DB error: ${noteErr.message}` }, { status: 500 })
   }
 
-  // 6. Upsert profile
+  // 5. Upsert profile
   if (intent === 'property_scouted') {
-    const phone = extracted.owner_phone as string | null
+    const phone = fields.owner_phone as string | null
 
-    await db.from('property_scouted').upsert(
+    const { error: upsertErr } = await db.from('property_scouted').upsert(
       {
         agency_id:         agencyId,
         agent_id:          user.id,
-        owner_phone:       phone,
-        owner_email:       extracted.owner_email,
-        owner_name:        extracted.owner_name,
-        transaction_type:  extracted.transaction_type,
-        address:           extracted.address,
-        area:              extracted.area,
-        floor:             extracted.floor,
-        size_sqm:          extracted.size_sqm,
-        condition:         extracted.condition,
-        features:          extracted.features,
-        asking_price:      extracted.asking_price,
-        offers_received:   extracted.offers_received,
-        seller_motivation: extracted.seller_motivation,
-        seller_reason:     extracted.seller_reason,
-        ai_summary:        extracted.ai_summary,
         raw_transcript:    transcript,
+        owner_phone:       phone,
+        owner_email:       fields.owner_email       ?? null,
+        owner_name:        fields.owner_name        ?? null,
+        transaction_type:  fields.transaction_type  ?? null,
+        address:           fields.address           ?? null,
+        area:              fields.area              ?? null,
+        floor:             fields.floor             ?? null,
+        size_sqm:          fields.size_sqm          ?? null,
+        condition:         fields.condition         ?? null,
+        year_built:        fields.year_built        ?? null,
+        year_renovated:    fields.year_renovated    ?? null,
+        rooms:             fields.rooms             ?? null,
+        balcony:           fields.balcony           ?? null,
+        parking:           fields.parking           ?? null,
+        security_door:     fields.security_door     ?? null,
+        asking_price:      fields.asking_price      ?? null,
+        seller_motivation: fields.seller_motivation ?? null,
+        seller_reason:     fields.seller_reason     ?? null,
+        ai_summary:        fields.ai_summary        ?? null,
+        features:          {},
       },
       { onConflict: 'agent_id,owner_phone', ignoreDuplicates: false }
     )
 
-    await db.rpc('append_voice_note_to_scouted', {
-      p_agent_id: user.id,
-      p_phone:    phone,
-      p_note_id:  note.id,
-    })
+    if (upsertErr) console.error('[voice-ingest] property_scouted upsert', upsertErr)
+
+    if (phone) {
+      await db.rpc('append_voice_note_to_scouted', {
+        p_agent_id: user.id, p_phone: phone, p_note_id: note.id,
+      })
+    }
   }
 
   if (intent === 'demand_profile') {
-    const phone = extracted.client_phone as string | null
+    const phone = fields.client_phone as string | null
 
-    await db.from('demand_profiles').upsert(
+    const { error: upsertErr } = await db.from('demand_profiles').upsert(
       {
         agency_id:        agencyId,
         agent_id:         user.id,
         lead_id:          leadId ?? null,
-        client_name:      extracted.client_name,
-        client_phone:     phone,
-        client_email:     extracted.client_email,
-        transaction_type: extracted.transaction_type,
-        property_type:    extracted.property_type,
-        floor_min:        extracted.floor_min,
-        floor_max:        extracted.floor_max,
-        size_min:         extracted.size_min,
-        size_max:         extracted.size_max,
-        budget_eur:       extracted.budget_eur,
-        condition_req:    extracted.condition_req,
-        must_have:        extracted.must_have,
-        nice_to_have:     extracted.nice_to_have,
-        areas_preferred:  extracted.areas_preferred,
-        ai_summary:       extracted.ai_summary,
         raw_transcript:   transcript,
+        client_name:      fields.client_name      ?? null,
+        client_phone:     phone,
+        client_email:     fields.client_email     ?? null,
+        transaction_type: fields.transaction_type ?? null,
+        property_type:    fields.property_type    ?? null,
+        floor_min:        fields.floor_min        ?? null,
+        floor_max:        fields.floor_max        ?? null,
+        size_min:         fields.size_min         ?? null,
+        size_max:         fields.size_max         ?? null,
+        budget_eur:       fields.budget_eur       ?? null,
+        condition_req:    fields.condition_req    ?? null,
+        must_have:        fields.must_have        ?? [],
+        nice_to_have:     fields.nice_to_have     ?? [],
+        areas_preferred:  fields.areas_preferred  ?? [],
+        ai_summary:       fields.ai_summary       ?? null,
       },
       { onConflict: 'agent_id,client_phone', ignoreDuplicates: false }
     )
 
-    await db.rpc('append_voice_note_to_demand', {
-      p_agent_id: user.id,
-      p_phone:    phone,
-      p_note_id:  note.id,
-    })
+    if (upsertErr) console.error('[voice-ingest] demand_profiles upsert', upsertErr)
 
-    if (phone && extracted.budget_eur) {
-      await db.from('leads')
-        .update({ budget_eur: extracted.budget_eur, last_note_id: note.id })
-        .eq('agency_id', agencyId)
-        .eq('phone_number', phone)
+    if (phone) {
+      await db.rpc('append_voice_note_to_demand', {
+        p_agent_id: user.id, p_phone: phone, p_note_id: note.id,
+      })
     }
   }
 
   return NextResponse.json({
-    ok:       true,
+    ok:      true,
     intent,
-    note_id:  note.id,
-    summary:  extracted.ai_summary ?? transcript.slice(0, 120),
-    extracted,
+    note_id: note.id,
+    summary: (fields.ai_summary as string) ?? transcript.slice(0, 120),
   })
 }

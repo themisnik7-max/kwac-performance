@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { createClient }              from '@supabase/supabase-js'
-import { whisperTranscribe }         from '@/lib/voice/cloudflare-ai'
+import { NextRequest, NextResponse }                                      from 'next/server'
+import { createClient }                                                    from '@supabase/supabase-js'
+import { transcribeGreek }                                                 from '@/lib/voice/openai-stt'
+import { detectIntent, extractPropertyScouted, extractDemandProfile }     from '@/lib/voice/extractors'
 
 const MAX_AUDIO_MB = 24
 
@@ -15,6 +16,8 @@ async function resolveUser(token: string) {
   return user
 }
 
+// Returns transcript + intent + pre-extracted structured fields.
+// Client shows a structured form for review before submission.
 export async function POST(req: NextRequest) {
   const token = req.headers.get('Authorization')?.replace('Bearer ', '') ?? ''
   const user  = await resolveUser(token)
@@ -28,15 +31,29 @@ export async function POST(req: NextRequest) {
   if (audioBlob.size > MAX_AUDIO_MB * 1024 * 1024)
     return NextResponse.json({ error: `Audio exceeds ${MAX_AUDIO_MB}MB` }, { status: 413 })
 
+  // Step 1: transcribe
+  let transcript: string
   try {
-    const transcript = await whisperTranscribe(audioBlob)
-    if (!transcript)
-      return NextResponse.json({ error: 'Empty transcript' }, { status: 422 })
-    return NextResponse.json({ transcript })
+    transcript = await transcribeGreek(audioBlob)
   } catch (err) {
-    // Pass real error to client so debugging is visible
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[voice-transcribe]', msg)
     return NextResponse.json({ error: msg }, { status: 503 })
   }
+
+  if (!transcript)
+    return NextResponse.json({ error: 'Empty transcript' }, { status: 422 })
+
+  // Step 2: intent + extraction (parallel)
+  const intent = detectIntent(transcript)
+  let extracted: Record<string, unknown> = {}
+  try {
+    if      (intent === 'property_scouted') extracted = await extractPropertyScouted(transcript)
+    else if (intent === 'demand_profile')   extracted = await extractDemandProfile(transcript)
+  } catch (err) {
+    console.error('[voice-transcribe] extraction failed', err)
+    // Non-fatal — client will show empty form fields
+  }
+
+  return NextResponse.json({ transcript, intent, extracted })
 }
