@@ -45,24 +45,25 @@ export async function POST(req: NextRequest) {
 
   if (!transcript) return NextResponse.json({ error: 'No transcript or intent provided' }, { status: 400 })
 
-  // 4. Audit log in voice_notes
-  const { data: note, error: noteErr } = await db
-    .from('voice_notes')
-    .insert({
-      agency_id:   agencyId,
-      agent_id:    user.id,
-      lead_id:     leadId     ?? null,
-      property_id: propertyId ?? null,
-      meeting_id:  meetingId  ?? null,
-      transcript,
-      extracted:   { intent, ...fields },
-    })
-    .select('id')
-    .single()
-
-  if (noteErr) {
-    console.error('[voice-ingest] voice_notes insert', noteErr)
-    return NextResponse.json({ error: `DB error: ${noteErr.message}` }, { status: 500 })
+  // 4. Audit log in voice_notes (skip for manual entries — non-fatal)
+  const isManual = transcript === '(manual entry)'
+  let note: { id: string } | null = null
+  if (!isManual) {
+    const { data: n, error: noteErr } = await db
+      .from('voice_notes')
+      .insert({
+        agency_id:   agencyId,
+        agent_id:    user.id,
+        lead_id:     leadId     ?? null,
+        property_id: propertyId ?? null,
+        meeting_id:  meetingId  ?? null,
+        transcript,
+        extracted:   { intent, ...fields },
+      })
+      .select('id')
+      .single()
+    if (noteErr) console.error('[voice-ingest] voice_notes insert (non-fatal)', noteErr)
+    note = n
   }
 
   // 5. Write to unified meeting_properties
@@ -136,7 +137,7 @@ export async function POST(req: NextRequest) {
       upsertedId = existingId
 
       // Append voice note
-      await db.rpc('append_voice_note_to_property', { p_property_id: existingId, p_note_id: note.id })
+      if (note) await db.rpc('append_voice_note_to_property', { p_property_id: existingId, p_note_id: note.id })
     } else {
       const { data: mp, error: insErr } = await db
         .from('meeting_properties')
@@ -149,7 +150,7 @@ export async function POST(req: NextRequest) {
       }
       upsertedId = mp?.id ?? null
 
-      if (upsertedId) {
+      if (upsertedId && note) {
         await db.rpc('append_voice_note_to_property', { p_property_id: upsertedId, p_note_id: note.id })
       }
     }
@@ -195,14 +196,14 @@ export async function POST(req: NextRequest) {
     let demandId: string | null = existingId
     if (existingId) {
       await db.from('demand_profiles').update(payload).eq('id', existingId)
-      await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
+      if (note) await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
     } else {
       const { data: dp } = await db.from('demand_profiles')
         .insert({ ...payload, status: 'active' })
         .select('id').single()
       demandId = dp?.id ?? null
       if (dp?.id && phone) {
-        await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
+        if (note) await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
       }
     }
 

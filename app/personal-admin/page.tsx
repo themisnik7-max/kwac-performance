@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import { createClient }         from '@supabase/supabase-js'
-import { VoiceMemoButton }      from '@/components/VoiceMemoButton'
-import { PropertyPhotoUpload }  from '@/components/PropertyPhotoUpload'
-import { PropertyDocUpload }    from '@/components/PropertyDocUpload'
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { createClient }        from '@supabase/supabase-js'
+import { VoiceMemoButton }     from '@/components/VoiceMemoButton'
+import { PropertyPhotoUpload } from '@/components/PropertyPhotoUpload'
+import { PropertyDocUpload }   from '@/components/PropertyDocUpload'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -34,31 +34,54 @@ type DemandRow = {
   updated_at: string; voice_note_ids: string[]
 }
 
-// ── Styling ───────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────
 
-const RED  = '#CC2229'
-const CARD = { background: '#161616', border: '1px solid #1e1e1e', borderRadius: 8, padding: '14px 16px', marginBottom: 10 }
-const LBL  = { fontSize: 10, color: '#555', textTransform: 'uppercase' as const, letterSpacing: '0.05em', margin: 0 }
-const VAL  = { fontSize: 13, color: '#d0d0d0', margin: 0 }
+const RED = '#CC2229'
+
+const PROP_STATUSES = [
+  { v: 'pending',       l: 'Καταγραφή'     },
+  { v: 'for_appraisal', l: 'Προς Εκτίμηση' },
+  { v: 'estimated',     l: 'Εκτιμήθηκε'   },
+  { v: 'completed',     l: 'Ανέθεσε'      },
+  { v: 'inactive',      l: 'Ανενεργό'     },
+]
+
+const DEM_STATUSES = [
+  { v: 'active',   l: 'Ενεργή'   },
+  { v: 'matched',  l: 'Ταίριαξε' },
+  { v: 'closed',   l: 'Έκλεισε'  },
+  { v: 'inactive', l: 'Ανενεργή' },
+]
+
+const STATUS_COLORS: Record<string, [string, string]> = {
+  pending:       ['#1e293b', '#94a3b8'],
+  for_appraisal: ['#2d1b00', '#fbbf24'],
+  estimated:     ['#1a1a2e', '#818cf8'],
+  completed:     ['#1c2e1c', '#86efac'],
+  active:        ['#1c2e1c', '#86efac'],
+  matched:       ['#1a1a2e', '#818cf8'],
+  closed:        ['#1e293b', '#94a3b8'],
+  inactive:      ['#1e1e1e', '#555'],
+}
+
+const TTL_MAP: Record<string, string> = { sale: 'Πώληση', rent: 'Ενοίκιο', buy: 'Αγορά' }
 
 function Badge({ s }: { s: string }) {
-  const map: Record<string, [string,string]> = {
-    pending: ['#1e293b','#94a3b8'], for_appraisal: ['#2d1b00','#fbbf24'],
-    estimated: ['#1a1a2e','#818cf8'], completed: ['#1c2e1c','#86efac'],
-    active: ['#1c2e1c','#86efac'], matched: ['#1a1a2e','#818cf8'],
-    closed: ['#1e293b','#94a3b8'], inactive: ['#1e1e1e','#555'],
-  }
-  const [bg, color] = map[s] ?? ['#1e1e1e','#888']
-  return <span style={{ background: bg, color, borderRadius: 4, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>{s}</span>
+  const [bg, color] = STATUS_COLORS[s] ?? ['#1e1e1e', '#888']
+  const label = [...PROP_STATUSES, ...DEM_STATUSES].find(x => x.v === s)?.l ?? s
+  return <span style={{ background: bg, color, borderRadius: 4, padding: '2px 7px', fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap' }}>{label}</span>
 }
 
 function fmt(n: number | null | undefined, u = '') {
   return n == null ? '—' : n.toLocaleString('el-GR') + (u ? ' ' + u : '')
 }
 
-// ── Inline-edit helpers ───────────────────────────────────────────
+// ── Edit helpers ──────────────────────────────────────────────────
 
 type ES = Record<string, unknown>
+
+const ARRAY_KEYS = new Set(['areas_preferred', 'must_have', 'nice_to_have', 'voice_note_ids'])
+const NUM_KEYS   = new Set(['sqm','floor','rooms','year_built','year_renovated','asking_price','budget_eur','size_min','size_max','floor_min','floor_max'])
 
 function toES(row: ES): ES {
   const s: ES = {}
@@ -71,356 +94,418 @@ function fromES(state: ES, orig: ES): ES {
   const out: ES = {}
   for (const [k, v] of Object.entries(state)) {
     if (v === null || v === '') { out[k] = null; continue }
-    const o = orig[k]
-    if (Array.isArray(o))        out[k] = String(v).split(',').map(s => s.trim()).filter(Boolean)
-    else if (typeof o === 'number')  out[k] = Number(v)
-    else if (typeof o === 'boolean') out[k] = v === 'true' || v === true
-    else out[k] = v
+    if (ARRAY_KEYS.has(k) || Array.isArray(orig[k])) {
+      out[k] = String(v).split(',').map(s => s.trim()).filter(Boolean)
+    } else if (NUM_KEYS.has(k) || typeof orig[k] === 'number') {
+      out[k] = Number(v)
+    } else if (typeof orig[k] === 'boolean') {
+      out[k] = v === 'true' || v === true
+    } else {
+      out[k] = v
+    }
   }
   return out
 }
 
-function EI({ label, k, type, state, set }: {
-  label: string; k: string; type: 'text'|'number'|'checkbox'|'select'
+// ── Shared field input ────────────────────────────────────────────
+
+const LBL: React.CSSProperties = { fontSize: 10, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 2px' }
+const VAL: React.CSSProperties = { fontSize: 12, color: '#d0d0d0', margin: 0 }
+
+function FI({ label, k, type, state, set }: {
+  label: string; k: string; type: 'text' | 'number' | 'checkbox'
   state: ES; set: (k: string, v: unknown) => void
-  options?: string[]
 }) {
   const val = state[k]
   return (
     <div>
       <p style={LBL}>{label}</p>
-      {type === 'checkbox' ? (
-        <label style={{ display:'flex', gap:5, alignItems:'center', cursor:'pointer' }}>
-          <input type="checkbox" checked={!!val} onChange={e=>set(k,e.target.checked)} style={{ accentColor:RED, width:13, height:13 }} />
-          <span style={{ fontSize:12, color:'#888' }}>{val?'Ναι':'Όχι'}</span>
-        </label>
-      ) : (
-        <input type={type==='number'?'number':'text'} value={val==null?'':String(val)}
-          onChange={e=>set(k,e.target.value)} placeholder="—"
-          style={{ width:'100%', boxSizing:'border-box', background:'#0d0d0d', border:'1px solid #2a2a2a', borderRadius:4, color:'#e0e0e0', fontSize:13, padding:'4px 7px', outline:'none' }}
-        />
-      )}
+      {type === 'checkbox'
+        ? <label style={{ display: 'flex', gap: 5, alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" checked={!!val} onChange={e => set(k, e.target.checked)} style={{ accentColor: RED }} />
+            <span style={{ fontSize: 12, color: '#888' }}>{val ? 'Ναι' : 'Όχι'}</span>
+          </label>
+        : <input type={type === 'number' ? 'number' : 'text'} value={val == null ? '' : String(val)}
+            onChange={e => set(k, e.target.value)} placeholder="—"
+            style={{ width: '100%', boxSizing: 'border-box', background: '#0d0d0d', border: '1px solid #222', borderRadius: 4, color: '#e0e0e0', fontSize: 12, padding: '4px 7px', outline: 'none' }}
+          />
+      }
     </div>
   )
 }
 
-// ── Manual entry forms ────────────────────────────────────────────
+// ── Slot row (collapsed) ──────────────────────────────────────────
 
-const EMPTY_PROP: ES = {
-  owner_name:'', owner_phone:'', owner_email:'', address:'', area:'',
-  transaction_type:'sale', asking_price:'', sqm:'', floor:'', rooms:'',
-  year_built:'', year_renovated:'', condition:'', balcony:false, parking:false,
-  security_door:false, seller_motivation:'', ai_summary:'',
-}
-const EMPTY_DEM: ES = {
-  client_name:'', client_phone:'', client_email:'', transaction_type:'buy',
-  property_type:'', budget_eur:'', size_min:'', size_max:'', floor_min:'', floor_max:'',
-  areas_preferred:'', must_have:'', condition_req:'', ai_summary:'',
+const SLOT: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
+  background: '#111', border: '1px solid #1a1a1a', borderRadius: 6,
+  marginBottom: 4, cursor: 'pointer', userSelect: 'none',
 }
 
-function ManualPropertyForm({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
-  const [state, setState] = useState<ES>({ ...EMPTY_PROP })
-  const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState<string|null>(null)
-  const set = (k: string, v: unknown) => setState(p => ({ ...p, [k]: v }))
-
-  async function submit() {
-    setSaving(true); setErr(null)
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) { setErr('Δεν βρέθηκε session'); setSaving(false); return }
-
-    const fields = fromES(state, EMPTY_PROP)
-    const res = await fetch('/api/voice-ingest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ transcript: '(manual entry)', intent: 'property_scouted', fields }),
-    })
-    const data = await res.json()
-    if (!res.ok) { setErr(data.error ?? 'Σφάλμα'); setSaving(false); return }
-    onSaved()
-  }
-
-  return (
-    <div style={{ ...CARD, border: `1px solid ${RED}44` }}>
-      <p style={{ fontSize: 12, fontWeight: 700, color: RED, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 12px' }}>Νέα Καταγραφή Ακινήτου</p>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))', gap:'8px 12px', marginBottom:12 }}>
-        <EI label="Ιδιοκτήτης"       k="owner_name"        type="text"     state={state} set={set} />
-        <EI label="Τηλέφωνο"         k="owner_phone"       type="text"     state={state} set={set} />
-        <EI label="Email ιδιοκτήτη"  k="owner_email"       type="text"     state={state} set={set} />
-        <EI label="Τύπος"            k="transaction_type"  type="text"     state={state} set={set} />
-        <EI label="Διεύθυνση"        k="address"           type="text"     state={state} set={set} />
-        <EI label="Περιοχή"          k="area"              type="text"     state={state} set={set} />
-        <EI label="Τιμή (€)"         k="asking_price"      type="number"   state={state} set={set} />
-        <EI label="τμ"               k="sqm"               type="number"   state={state} set={set} />
-        <EI label="Όροφος"           k="floor"             type="number"   state={state} set={set} />
-        <EI label="Υ/Δ"             k="rooms"             type="number"   state={state} set={set} />
-        <EI label="Έτος κατ."       k="year_built"        type="number"   state={state} set={set} />
-        <EI label="Έτος ανακ."      k="year_renovated"    type="number"   state={state} set={set} />
-        <EI label="Κατάσταση"        k="condition"         type="text"     state={state} set={set} />
-        <EI label="Μπαλκόνι"        k="balcony"           type="checkbox" state={state} set={set} />
-        <EI label="Πάρκινγκ"        k="parking"           type="checkbox" state={state} set={set} />
-        <EI label="Ασφ. Πόρτα"      k="security_door"     type="checkbox" state={state} set={set} />
-        <div style={{ gridColumn:'1/-1' }}><EI label="Κίνητρο πωλητή" k="seller_motivation" type="text" state={state} set={set} /></div>
-        <div style={{ gridColumn:'1/-1' }}><EI label="Σύνοψη"         k="ai_summary"        type="text" state={state} set={set} /></div>
-      </div>
-      {err && <p style={{ fontSize:12, color:'#f87171', margin:'0 0 8px' }}>{err}</p>}
-      <div style={{ display:'flex', gap:8 }}>
-        <button onClick={submit} disabled={saving} style={{ padding:'7px 16px', background:RED, color:'#fff', border:'none', borderRadius:5, fontSize:13, fontWeight:600, cursor:saving?'not-allowed':'pointer', opacity:saving?0.6:1 }}>
-          {saving?'Αποθήκευση…':'Αποθήκευση'}
-        </button>
-        <button onClick={onCancel} disabled={saving} style={{ padding:'7px 12px', background:'#1e1e1e', color:'#888', border:'1px solid #2a2a2a', borderRadius:5, fontSize:13, cursor:'pointer' }}>Ακύρωση</button>
-      </div>
-    </div>
-  )
-}
-
-function ManualDemandForm({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
-  const [state, setState] = useState<ES>({ ...EMPTY_DEM })
-  const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState<string|null>(null)
-  const set = (k: string, v: unknown) => setState(p => ({ ...p, [k]: v }))
-
-  async function submit() {
-    setSaving(true); setErr(null)
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) { setErr('Δεν βρέθηκε session'); setSaving(false); return }
-
-    const fields = fromES(state, EMPTY_DEM)
-    const res = await fetch('/api/voice-ingest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
-      body: JSON.stringify({ transcript: '(manual entry)', intent: 'demand_profile', fields }),
-    })
-    const data = await res.json()
-    if (!res.ok) { setErr(data.error ?? 'Σφάλμα'); setSaving(false); return }
-    onSaved()
-  }
-
-  return (
-    <div style={{ ...CARD, border: `1px solid ${RED}44` }}>
-      <p style={{ fontSize: 12, fontWeight: 700, color: RED, textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 12px' }}>Νέα Ζήτηση Πελάτη</p>
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))', gap:'8px 12px', marginBottom:12 }}>
-        <EI label="Πελάτης"     k="client_name"     type="text"   state={state} set={set} />
-        <EI label="Τηλέφωνο"   k="client_phone"    type="text"   state={state} set={set} />
-        <EI label="Email"       k="client_email"    type="text"   state={state} set={set} />
-        <EI label="Τύπος"      k="transaction_type" type="text"  state={state} set={set} />
-        <EI label="Ακίνητο"   k="property_type"   type="text"   state={state} set={set} />
-        <EI label="Budget (€)" k="budget_eur"      type="number" state={state} set={set} />
-        <EI label="τμ από"    k="size_min"        type="number" state={state} set={set} />
-        <EI label="τμ έως"    k="size_max"        type="number" state={state} set={set} />
-        <EI label="Όροφ. από" k="floor_min"       type="number" state={state} set={set} />
-        <EI label="Όροφ. έως" k="floor_max"       type="number" state={state} set={set} />
-        <EI label="Κατάσταση" k="condition_req"   type="text"   state={state} set={set} />
-        <div style={{ gridColumn:'1/-1' }}><EI label="Περιοχές (comma)"  k="areas_preferred" type="text" state={state} set={set} /></div>
-        <div style={{ gridColumn:'1/-1' }}><EI label="Must-have (comma)" k="must_have"       type="text" state={state} set={set} /></div>
-        <div style={{ gridColumn:'1/-1' }}><EI label="Σύνοψη"           k="ai_summary"      type="text" state={state} set={set} /></div>
-      </div>
-      {err && <p style={{ fontSize:12, color:'#f87171', margin:'0 0 8px' }}>{err}</p>}
-      <div style={{ display:'flex', gap:8 }}>
-        <button onClick={submit} disabled={saving} style={{ padding:'7px 16px', background:RED, color:'#fff', border:'none', borderRadius:5, fontSize:13, fontWeight:600, cursor:saving?'not-allowed':'pointer', opacity:saving?0.6:1 }}>
-          {saving?'Αποθήκευση…':'Αποθήκευση'}
-        </button>
-        <button onClick={onCancel} disabled={saving} style={{ padding:'7px 12px', background:'#1e1e1e', color:'#888', border:'1px solid #2a2a2a', borderRadius:5, fontSize:13, cursor:'pointer' }}>Ακύρωση</button>
-      </div>
-    </div>
-  )
+function btnS(bg: string, color: string): React.CSSProperties {
+  return { padding: '4px 10px', fontSize: 11, background: bg, color, border: '1px solid #252525', borderRadius: 4, cursor: 'pointer' }
 }
 
 // ── Property card ─────────────────────────────────────────────────
 
-function PropertyCard({ row, onSaved }: { row: PropertyRow; onSaved: () => void }) {
-  const [editing, setEditing] = useState(false)
+const EMPTY_PROP: ES = {
+  owner_name: '', owner_phone: '', owner_email: '', address: '', area: '',
+  transaction_type: 'sale', asking_price: null, sqm: null, floor: null, rooms: null,
+  year_built: null, year_renovated: null, condition: '', balcony: false, parking: false,
+  security_door: false, seller_motivation: '', ai_summary: '',
+}
+
+function PropertyCard({ row, onSaved, onCancel, isNew }: {
+  row: PropertyRow | null; onSaved: () => void; onCancel?: () => void; isNew?: boolean
+}) {
+  const [open,       setOpen]       = useState(!!isNew)
+  const [editMode,   setEditMode]   = useState(!!isNew)
   const [showPhotos, setShowPhotos] = useState(false)
   const [showDocs,   setShowDocs]   = useState(false)
-  const [state, setState] = useState<ES>({})
-  const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState<string|null>(null)
+  const [state,      setState]      = useState<ES>(row ? toES(row as unknown as ES) : { ...EMPTY_PROP })
+  const [saving,     setSaving]     = useState(false)
+  const [err,        setErr]        = useState<string | null>(null)
 
-  function startEdit() { setState(toES(row as unknown as ES)); setEditing(true); setErr(null) }
+  const set = (k: string, v: unknown) => setState(p => ({ ...p, [k]: v }))
 
   async function save() {
     setSaving(true); setErr(null)
-    const payload = fromES(state, row as unknown as ES)
-    delete payload.id; delete payload.updated_at; delete payload.created_at; delete payload.voice_note_ids
-    const { error } = await supabase.from('meeting_properties').update(payload).eq('id', row.id)
-    setSaving(false)
-    if (error) { setErr(error.message); return }
-    setEditing(false); onSaved()
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setErr('Δεν βρέθηκε session'); setSaving(false); return }
+
+    if (isNew) {
+      const fields = fromES(state, EMPTY_PROP)
+      const res = await fetch('/api/voice-ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ transcript: '(manual entry)', intent: 'property_scouted', fields }),
+      })
+      const data = await res.json()
+      setSaving(false)
+      if (!res.ok) { setErr(data.error ?? 'Σφάλμα'); return }
+      onSaved()
+    } else if (row) {
+      const payload = fromES(state, row as unknown as ES)
+      delete payload.id; delete payload.updated_at; delete payload.created_at; delete payload.voice_note_ids
+      const { error } = await supabase.from('meeting_properties').update(payload).eq('id', row.id)
+      setSaving(false)
+      if (error) { setErr(error.message); return }
+      setEditMode(false); onSaved()
+    }
   }
 
-  const btns = (
-    <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
-      <Badge s={row.status} />
-      <button onClick={()=>setShowPhotos(p=>!p)} style={{ padding:'3px 9px', fontSize:11, background:'#1e1e1e', border:'1px solid #2a2a2a', borderRadius:4, color:'#888', cursor:'pointer' }}>📷 {showPhotos?'▲':'Φωτ.'}</button>
-      <button onClick={()=>setShowDocs(p=>!p)}   style={{ padding:'3px 9px', fontSize:11, background:'#1e1e1e', border:'1px solid #2a2a2a', borderRadius:4, color:'#888', cursor:'pointer' }}>📁 {showDocs?'▲':'Φάκελος'}</button>
-      {!editing && <button onClick={startEdit} style={{ padding:'3px 9px', fontSize:11, background:'#1e1e1e', border:'1px solid #2a2a2a', borderRadius:4, color:'#888', cursor:'pointer' }}>✏ Επεξ.</button>}
-    </div>
-  )
+  async function setStatus(s: string) {
+    if (!row) return
+    await supabase.from('meeting_properties').update({ status: s }).eq('id', row.id)
+    onSaved()
+  }
 
-  const head = (
-    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap', marginBottom:10 }}>
-      <div>
-        <span style={{ fontSize:15, fontWeight:600, color:'#f0f0f0' }}>{row.owner_name ?? row.title ?? 'Ακίνητο'}</span>
-        {row.owner_phone && <span style={{ fontSize:12, color:'#555', marginLeft:10 }}>{row.owner_phone}</span>}
-        {row.ilist_id    && <span style={{ fontSize:10, color:'#333', marginLeft:10 }}>{row.ilist_id}</span>}
-      </div>
-      {btns}
-    </div>
-  )
-
-  if (editing) {
+  if (!open && !isNew && row) {
     return (
-      <div style={{ ...CARD, border:`1px solid ${RED}33` }}>
-        {head}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))', gap:'8px 12px', marginBottom:12 }}>
-          <EI label="Ιδιοκτήτης"      k="owner_name"        type="text"     state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Τηλέφωνο"        k="owner_phone"       type="text"     state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Email ιδιοκτήτη" k="owner_email"       type="text"     state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Τύπος"           k="transaction_type"  type="text"     state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Διεύθυνση"       k="address"           type="text"     state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Περιοχή"         k="area"              type="text"     state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Τιμή (€)"        k="asking_price"      type="number"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="τμ"              k="sqm"               type="number"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Όροφος"          k="floor"             type="number"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Υ/Δ"            k="rooms"             type="number"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Έτος κατ."      k="year_built"        type="number"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Έτος ανακ."     k="year_renovated"    type="number"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Κατάσταση"       k="condition"         type="text"     state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Μπαλκόνι"       k="balcony"           type="checkbox" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Πάρκινγκ"       k="parking"           type="checkbox" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Ασφ. Πόρτα"     k="security_door"     type="checkbox" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <div style={{ gridColumn:'1/-1' }}><EI label="Κίνητρο" k="seller_motivation" type="text" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} /></div>
-          <div style={{ gridColumn:'1/-1' }}><EI label="Σύνοψη"  k="ai_summary"        type="text" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} /></div>
-        </div>
-        {err && <p style={{ fontSize:12, color:'#f87171', margin:'0 0 8px' }}>{err}</p>}
-        <div style={{ display:'flex', gap:8, marginBottom:12 }}>
-          <button onClick={save} disabled={saving} style={{ padding:'7px 14px', background:RED, color:'#fff', border:'none', borderRadius:5, fontSize:13, fontWeight:600, cursor:saving?'not-allowed':'pointer', opacity:saving?0.6:1 }}>{saving?'…':'Αποθήκευση'}</button>
-          <button onClick={()=>setEditing(false)} style={{ padding:'7px 12px', background:'#1e1e1e', color:'#888', border:'1px solid #2a2a2a', borderRadius:5, fontSize:13, cursor:'pointer' }}>Ακύρωση</button>
-        </div>
-        {showPhotos && <PropertyPhotoUpload propertyId={row.id} />}
-        {showDocs   && <PropertyDocUpload   propertyId={row.id} />}
+      <div style={SLOT} onClick={() => setOpen(true)}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#e0e0e0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {row.owner_name ?? row.address ?? 'Ακίνητο'}
+        </span>
+        {row.area           && <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>{row.area}</span>}
+        {row.sqm            && <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>{row.sqm} τμ</span>}
+        {row.asking_price   && <span style={{ fontSize: 11, color: '#888', flexShrink: 0 }}>{(row.asking_price / 1000).toFixed(0)}κ€</span>}
+        <Badge s={row.status} />
+        <span style={{ color: '#333' }}>›</span>
       </div>
     )
   }
 
+  const editFields = (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: '8px 12px', marginBottom: 12 }}>
+      <FI label="Ιδιοκτήτης"      k="owner_name"        type="text"     state={state} set={set} />
+      <FI label="Τηλέφωνο"        k="owner_phone"       type="text"     state={state} set={set} />
+      <FI label="Email ιδιοκτήτη" k="owner_email"       type="text"     state={state} set={set} />
+      <FI label="Τύπος"           k="transaction_type"  type="text"     state={state} set={set} />
+      <FI label="Διεύθυνση"       k="address"           type="text"     state={state} set={set} />
+      <FI label="Περιοχή"         k="area"              type="text"     state={state} set={set} />
+      <FI label="Τιμή (€)"        k="asking_price"      type="number"   state={state} set={set} />
+      <FI label="τμ"              k="sqm"               type="number"   state={state} set={set} />
+      <FI label="Όροφος"          k="floor"             type="number"   state={state} set={set} />
+      <FI label="Υ/Δ"            k="rooms"             type="number"   state={state} set={set} />
+      <FI label="Έτος κατ."      k="year_built"        type="number"   state={state} set={set} />
+      <FI label="Έτος ανακ."     k="year_renovated"    type="number"   state={state} set={set} />
+      <FI label="Κατάσταση"       k="condition"         type="text"     state={state} set={set} />
+      <FI label="Μπαλκόνι"       k="balcony"           type="checkbox" state={state} set={set} />
+      <FI label="Πάρκινγκ"       k="parking"           type="checkbox" state={state} set={set} />
+      <FI label="Ασφ. Πόρτα"     k="security_door"     type="checkbox" state={state} set={set} />
+      <div style={{ gridColumn: '1/-1' }}><FI label="Κίνητρο πωλητή" k="seller_motivation" type="text" state={state} set={set} /></div>
+      <div style={{ gridColumn: '1/-1' }}><FI label="Σύνοψη"         k="ai_summary"        type="text" state={state} set={set} /></div>
+    </div>
+  )
+
+  const staticView = row && (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(110px,1fr))', gap: '5px 12px', marginBottom: 8 }}>
+      {([
+        ['Περιοχή',    row.area],
+        ['Διεύθυνση',  row.address],
+        ['Τύπος',      TTL_MAP[row.transaction_type ?? ''] ?? row.transaction_type],
+        ['Τιμή',       row.asking_price ? fmt(row.asking_price, '€') : null],
+        ['τμ',         row.sqm ? fmt(row.sqm, 'τμ') : null],
+        ['Όροφος',     row.floor === 0 ? 'Ισόγειο' : (row.floor ? fmt(row.floor, 'ος') : null)],
+        ['Υ/Δ',        row.rooms ? String(row.rooms) : null],
+        ['Έτος',       row.year_built ? String(row.year_built) : null],
+        ['Κατάσταση',  row.condition],
+        ['Email',      row.owner_email],
+      ] as [string, string | null][]).filter(([, v]) => !!v).map(([l, v]) => (
+        <div key={l}><p style={LBL}>{l}</p><p style={VAL}>{v}</p></div>
+      ))}
+    </div>
+  )
+
   return (
-    <div style={CARD}>
-      {head}
-      {row.ai_summary && <p style={{ fontSize:13, color:'#94a3b8', margin:'0 0 10px', fontStyle:'italic' }}>{row.ai_summary}</p>}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(120px,1fr))', gap:'6px 14px' }}>
-        <div><p style={LBL}>Περιοχή</p><p style={VAL}>{row.area??'—'}</p></div>
-        <div><p style={LBL}>Διεύθυνση</p><p style={VAL}>{row.address??'—'}</p></div>
-        <div><p style={LBL}>Τύπος</p><p style={VAL}>{row.transaction_type==='sale'?'Πώληση':row.transaction_type==='rent'?'Ενοίκιο':'—'}</p></div>
-        <div><p style={LBL}>Τιμή</p><p style={VAL}>{fmt(row.asking_price,'€')}</p></div>
-        <div><p style={LBL}>τμ</p><p style={VAL}>{fmt(row.sqm,'τμ')}</p></div>
-        <div><p style={LBL}>Όροφος</p><p style={VAL}>{row.floor===0?'Ισόγειο':fmt(row.floor,'ος')}</p></div>
-        <div><p style={LBL}>Υ/Δ</p><p style={VAL}>{fmt(row.rooms)}</p></div>
-        <div><p style={LBL}>Έτος κατ.</p><p style={VAL}>{fmt(row.year_built)}</p></div>
-        <div><p style={LBL}>Μπαλκόνι</p><p style={VAL}>{row.balcony==null?'—':row.balcony?'Ναι':'Όχι'}</p></div>
-        <div><p style={LBL}>Πάρκινγκ</p><p style={VAL}>{row.parking==null?'—':row.parking?'Ναι':'Όχι'}</p></div>
-        <div><p style={LBL}>Κατάσταση</p><p style={VAL}>{row.condition??'—'}</p></div>
+    <div style={{ background: '#161616', border: '1px solid #1e1e1e', borderRadius: 8, padding: '12px 14px', marginBottom: 6 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#f0f0f0' }}>
+            {row?.owner_name ?? row?.address ?? 'Νέο Ακίνητο'}
+          </span>
+          {row?.owner_phone && <span style={{ fontSize: 11, color: '#555', marginLeft: 10 }}>{row.owner_phone}</span>}
+          {row?.ilist_id    && <span style={{ fontSize: 10, color: '#2a2a2a', marginLeft: 8 }}>{row.ilist_id}</span>}
+        </div>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
+          {row && <Badge s={row.status} />}
+          {row && <button onClick={() => setShowPhotos(p => !p)} style={btnS('#1e1e1e', '#555')}>📷</button>}
+          {row && <button onClick={() => setShowDocs(p => !p)}   style={btnS('#1e1e1e', '#555')}>📁</button>}
+          {!isNew && <button onClick={() => { setEditMode(p => !p); setErr(null) }} style={btnS('#1e1e1e', '#666')}>{editMode ? 'Άκυρο' : '✏'}</button>}
+          {!isNew && <button onClick={() => { setOpen(false); setEditMode(false); setShowPhotos(false); setShowDocs(false) }} style={btnS('#0a0a0a', '#333')}>✕</button>}
+        </div>
       </div>
-      <p style={{ fontSize:10, color:'#333', marginTop:8, marginBottom:0 }}>{new Date(row.created_at).toLocaleDateString('el-GR')}</p>
-      {showPhotos && <PropertyPhotoUpload propertyId={row.id} />}
-      {showDocs   && <PropertyDocUpload   propertyId={row.id} />}
+
+      {/* Status chips */}
+      {row && (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
+          {PROP_STATUSES.map(s => {
+            const active = row.status === s.v
+            const [bg, col] = STATUS_COLORS[s.v] ?? ['#1a1a1a', '#444']
+            return (
+              <button key={s.v} onClick={() => setStatus(s.v)}
+                style={{ padding: '3px 8px', fontSize: 10, fontWeight: 600, borderRadius: 4, cursor: 'pointer', border: 'none',
+                  background: active ? bg : '#1a1a1a', color: active ? col : '#444',
+                  outline: active ? `1px solid ${col}44` : 'none' }}>
+                {s.l}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {row?.ai_summary && !editMode && <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 8px', fontStyle: 'italic' }}>{row.ai_summary}</p>}
+
+      {editMode ? editFields : staticView}
+
+      {editMode && (
+        <>
+          {err && <p style={{ fontSize: 12, color: '#f87171', margin: '0 0 8px' }}>{err}</p>}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <button onClick={save} disabled={saving}
+              style={{ padding: '7px 16px', background: RED, color: '#fff', border: 'none', borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.6 : 1 }}>
+              {saving ? 'Αποθήκευση…' : 'Αποθήκευση'}
+            </button>
+            {isNew && onCancel && <button onClick={onCancel} style={btnS('#1e1e1e', '#666')}>Ακύρωση</button>}
+          </div>
+        </>
+      )}
+
+      {showPhotos && row && <PropertyPhotoUpload propertyId={row.id} />}
+      {showDocs   && row && <PropertyDocUpload   propertyId={row.id} />}
     </div>
   )
 }
 
 // ── Demand card ───────────────────────────────────────────────────
 
-function DemandCard({ row, onSaved }: { row: DemandRow; onSaved: () => void }) {
-  const [editing,     setEditing]     = useState(false)
-  const [state,       setState]       = useState<ES>({})
+const EMPTY_DEM: ES = {
+  client_name: '', client_phone: '', client_email: '', transaction_type: 'buy',
+  property_type: '', budget_eur: null, size_min: null, size_max: null,
+  floor_min: null, floor_max: null,
+  areas_preferred: [], must_have: [], nice_to_have: [],
+  condition_req: '', ai_summary: '',
+}
+
+function DemandCard({ row, onSaved, onCancel, isNew }: {
+  row: DemandRow | null; onSaved: () => void; onCancel?: () => void; isNew?: boolean
+}) {
+  const [open,        setOpen]        = useState(!!isNew)
+  const [editMode,    setEditMode]    = useState(!!isNew)
+  const [state,       setState]       = useState<ES>(row ? toES(row as unknown as ES) : { ...EMPTY_DEM })
   const [saving,      setSaving]      = useState(false)
-  const [err,         setErr]         = useState<string|null>(null)
+  const [err,         setErr]         = useState<string | null>(null)
   const [matching,    setMatching]    = useState(false)
-  const [matchResult, setMatchResult] = useState<string|null>(null)
+  const [matchResult, setMatchResult] = useState<string | null>(null)
+
+  const set = (k: string, v: unknown) => setState(p => ({ ...p, [k]: v }))
+
+  async function save() {
+    setSaving(true); setErr(null)
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setErr('Δεν βρέθηκε session'); setSaving(false); return }
+
+    if (isNew) {
+      const fields = fromES(state, EMPTY_DEM)
+      const res = await fetch('/api/voice-ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ transcript: '(manual entry)', intent: 'demand_profile', fields }),
+      })
+      const data = await res.json()
+      setSaving(false)
+      if (!res.ok) { setErr(data.error ?? 'Σφάλμα'); return }
+      onSaved()
+    } else if (row) {
+      const payload = fromES(state, row as unknown as ES)
+      delete payload.id; delete payload.updated_at; delete payload.voice_note_ids
+      const { error } = await supabase.from('demand_profiles').update(payload).eq('id', row.id)
+      setSaving(false)
+      if (error) { setErr(error.message); return }
+      setEditMode(false); onSaved()
+    }
+  }
+
+  async function setStatus(s: string) {
+    if (!row) return
+    await supabase.from('demand_profiles').update({ status: s }).eq('id', row.id)
+    onSaved()
+  }
 
   async function testMatch() {
+    if (!row) return
     setMatching(true); setMatchResult(null)
     const { data: { session } } = await supabase.auth.getSession()
     if (!session) { setMatchResult('Δεν βρέθηκε session'); setMatching(false); return }
     try {
       const res  = await fetch('/api/demand-match', {
         method: 'POST',
-        headers: { 'Content-Type':'application/json', Authorization:`Bearer ${session.access_token}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
         body: JSON.stringify({ demand_id: row.id }),
       })
       const data = await res.json()
       if (!res.ok) { setMatchResult(`Σφάλμα: ${data.error}`); setMatching(false); return }
       setMatchResult(
         data.matched === 0
-          ? 'Κανένα ταίριασμα με ενεργά ακίνητα (for_appraisal/estimated/completed).'
-          : `✅ ${data.matched} ακίνητ${data.matched===1?'ο':'α'} ταίριαξαν${data.email_sent?' — email στάλθηκε στο '+row.client_email+' ✉️':row.client_email?' — BREVO_API_KEY δεν βρέθηκε':' — δεν υπάρχει email πελάτη'}`
+          ? 'Κανένα ταίριασμα με ενεργά ακίνητα.'
+          : `✅ ${data.matched} ακίνητ${data.matched === 1 ? 'ο' : 'α'} ταίριαξαν` +
+            (data.email_sent ? ` — email → ${row.client_email} ✉️` : row.client_email ? ' (έλεγξε BREVO_API_KEY)' : ' — λείπει email πελάτη')
       )
-    } catch(e) { setMatchResult(`Σφάλμα: ${e}`) }
+    } catch (e) { setMatchResult(`Σφάλμα: ${e}`) }
     setMatching(false)
   }
 
-  async function save() {
-    setSaving(true); setErr(null)
-    const payload = fromES(state, row as unknown as ES)
-    delete payload.id; delete payload.updated_at; delete payload.voice_note_ids
-    const { error } = await supabase.from('demand_profiles').update(payload).eq('id', row.id)
-    setSaving(false)
-    if (error) { setErr(error.message); return }
-    setEditing(false); onSaved()
-  }
-
-  if (editing) {
+  if (!open && !isNew && row) {
     return (
-      <div style={{ ...CARD, border:`1px solid ${RED}33` }}>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))', gap:'8px 12px', marginBottom:12 }}>
-          <EI label="Πελάτης"     k="client_name"     type="text"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Τηλέφωνο"   k="client_phone"    type="text"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Email"       k="client_email"    type="text"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Τύπος"      k="transaction_type" type="text"  state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Ακίνητο"   k="property_type"   type="text"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Budget (€)" k="budget_eur"      type="number" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="τμ από"    k="size_min"        type="number" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="τμ έως"    k="size_max"        type="number" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <EI label="Κατάσταση" k="condition_req"   type="text"   state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} />
-          <div style={{ gridColumn:'1/-1' }}><EI label="Περιοχές (comma)" k="areas_preferred" type="text" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} /></div>
-          <div style={{ gridColumn:'1/-1' }}><EI label="Must-have"        k="must_have"       type="text" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} /></div>
-          <div style={{ gridColumn:'1/-1' }}><EI label="Σύνοψη"           k="ai_summary"      type="text" state={state} set={(k,v)=>setState(p=>({...p,[k]:v}))} /></div>
-        </div>
-        {err && <p style={{ fontSize:12, color:'#f87171', margin:'0 0 8px' }}>{err}</p>}
-        <div style={{ display:'flex', gap:8 }}>
-          <button onClick={save} disabled={saving} style={{ padding:'7px 14px', background:RED, color:'#fff', border:'none', borderRadius:5, fontSize:13, fontWeight:600, cursor:saving?'not-allowed':'pointer', opacity:saving?0.6:1 }}>{saving?'…':'Αποθήκευση'}</button>
-          <button onClick={()=>setEditing(false)} style={{ padding:'7px 12px', background:'#1e1e1e', color:'#888', border:'1px solid #2a2a2a', borderRadius:5, fontSize:13, cursor:'pointer' }}>Ακύρωση</button>
-        </div>
+      <div style={SLOT} onClick={() => setOpen(true)}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#e0e0e0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {row.client_name ?? 'Ζήτηση'}
+        </span>
+        {(row.areas_preferred ?? [])[0] && <span style={{ fontSize: 11, color: '#555', flexShrink: 0 }}>{row.areas_preferred[0]}</span>}
+        {row.budget_eur && <span style={{ fontSize: 11, color: '#888', flexShrink: 0 }}>{(row.budget_eur / 1000).toFixed(0)}κ€</span>}
+        <Badge s={row.status} />
+        <span style={{ color: '#333' }}>›</span>
       </div>
     )
   }
 
+  const editFields = (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: '8px 12px', marginBottom: 12 }}>
+      <FI label="Πελάτης"     k="client_name"      type="text"   state={state} set={set} />
+      <FI label="Τηλέφωνο"   k="client_phone"     type="text"   state={state} set={set} />
+      <FI label="Email"       k="client_email"     type="text"   state={state} set={set} />
+      <FI label="Τύπος"      k="transaction_type" type="text"   state={state} set={set} />
+      <FI label="Ακίνητο"   k="property_type"    type="text"   state={state} set={set} />
+      <FI label="Budget (€)" k="budget_eur"       type="number" state={state} set={set} />
+      <FI label="τμ από"    k="size_min"         type="number" state={state} set={set} />
+      <FI label="τμ έως"    k="size_max"         type="number" state={state} set={set} />
+      <FI label="Όρ. από"   k="floor_min"        type="number" state={state} set={set} />
+      <FI label="Όρ. έως"   k="floor_max"        type="number" state={state} set={set} />
+      <FI label="Κατάσταση" k="condition_req"    type="text"   state={state} set={set} />
+      <div style={{ gridColumn: '1/-1' }}><FI label="Περιοχές (με κόμμα)"  k="areas_preferred" type="text" state={state} set={set} /></div>
+      <div style={{ gridColumn: '1/-1' }}><FI label="Must-have (με κόμμα)" k="must_have"       type="text" state={state} set={set} /></div>
+      <div style={{ gridColumn: '1/-1' }}><FI label="Σύνοψη"               k="ai_summary"      type="text" state={state} set={set} /></div>
+    </div>
+  )
+
+  const staticView = row && (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(110px,1fr))', gap: '5px 12px', marginBottom: 8 }}>
+      {([
+        ['Τύπος',    TTL_MAP[row.transaction_type ?? ''] ?? row.transaction_type],
+        ['Ακίνητο',  row.property_type],
+        ['Budget',   row.budget_eur ? fmt(row.budget_eur, '€') : null],
+        ['τμ',       (row.size_min || row.size_max) ? `${row.size_min ?? '?'}–${row.size_max ?? '?'}` : null],
+        ['Περιοχές', (row.areas_preferred ?? []).join(', ') || null],
+        ['Must-have',(row.must_have ?? []).join(', ') || null],
+        ['Email',    row.client_email],
+      ] as [string, string | null][]).filter(([, v]) => !!v).map(([l, v]) => (
+        <div key={l}><p style={LBL}>{l}</p><p style={VAL}>{v}</p></div>
+      ))}
+    </div>
+  )
+
   return (
-    <div style={CARD}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, flexWrap:'wrap', marginBottom:10 }}>
-        <div>
-          <span style={{ fontSize:15, fontWeight:600, color:'#f0f0f0' }}>{row.client_name??'Άγνωστος Πελάτης'}</span>
-          {row.client_phone && <span style={{ fontSize:12, color:'#555', marginLeft:10 }}>{row.client_phone}</span>}
-          {row.client_email && <span style={{ fontSize:11, color:'#444', marginLeft:10 }}>{row.client_email}</span>}
+    <div style={{ background: '#161616', border: '1px solid #1e1e1e', borderRadius: 8, padding: '12px 14px', marginBottom: 6 }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: '#f0f0f0' }}>{row?.client_name ?? 'Νέα Ζήτηση'}</span>
+          {row?.client_phone && <span style={{ fontSize: 11, color: '#555', marginLeft: 10 }}>{row.client_phone}</span>}
         </div>
-        <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
-          <Badge s={row.status} />
-          <button onClick={testMatch} disabled={matching} style={{ padding:'3px 9px', fontSize:11, background:'#1c2e1c', border:'1px solid #166534', borderRadius:4, color:'#86efac', cursor:matching?'not-allowed':'pointer', opacity:matching?0.6:1 }}>
-            {matching?'⏳':'📧 Match'}
-          </button>
-          <button onClick={()=>{setState(toES(row as unknown as ES));setEditing(true);setErr(null)}} style={{ padding:'3px 9px', fontSize:11, background:'#1e1e1e', border:'1px solid #2a2a2a', borderRadius:4, color:'#888', cursor:'pointer' }}>✏ Επεξ.</button>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
+          {row && <Badge s={row.status} />}
+          {row && (
+            <button onClick={testMatch} disabled={matching}
+              style={{ padding: '4px 10px', fontSize: 11, background: '#1c2e1c', color: '#86efac', border: '1px solid #166534', borderRadius: 4, cursor: matching ? 'not-allowed' : 'pointer', opacity: matching ? 0.6 : 1 }}>
+              {matching ? '⏳' : '📧 Match'}
+            </button>
+          )}
+          {!isNew && <button onClick={() => { setEditMode(p => !p); setErr(null) }} style={btnS('#1e1e1e', '#666')}>{editMode ? 'Άκυρο' : '✏'}</button>}
+          {!isNew && <button onClick={() => { setOpen(false); setEditMode(false) }} style={btnS('#0a0a0a', '#333')}>✕</button>}
         </div>
       </div>
-      {matchResult && <p style={{ fontSize:12, color:matchResult.startsWith('✅')?'#86efac':'#f87171', margin:'0 0 8px', padding:'6px 8px', background:'#0d0d0d', borderRadius:4 }}>{matchResult}</p>}
-      {row.ai_summary && <p style={{ fontSize:13, color:'#94a3b8', margin:'0 0 10px', fontStyle:'italic' }}>{row.ai_summary}</p>}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(120px,1fr))', gap:'6px 14px' }}>
-        <div><p style={LBL}>Τύπος</p><p style={VAL}>{row.transaction_type==='buy'?'Αγορά':row.transaction_type==='rent'?'Ενοίκιο':'—'}</p></div>
-        <div><p style={LBL}>Ακίνητο</p><p style={VAL}>{row.property_type??'—'}</p></div>
-        <div><p style={LBL}>Budget</p><p style={VAL}>{fmt(row.budget_eur,'€')}</p></div>
-        <div><p style={LBL}>τμ</p><p style={VAL}>{row.size_min||row.size_max?`${row.size_min??'?'}–${row.size_max??'?'} τμ`:'—'}</p></div>
-        <div><p style={LBL}>Περιοχές</p><p style={VAL}>{(row.areas_preferred??[]).join(', ')||'—'}</p></div>
-        <div><p style={LBL}>Must-have</p><p style={VAL}>{(row.must_have??[]).join(', ')||'—'}</p></div>
-      </div>
-      <p style={{ fontSize:10, color:'#333', marginTop:8, marginBottom:0 }}>Τελ. ενημ. {new Date(row.updated_at).toLocaleDateString('el-GR')}</p>
+
+      {/* Status chips */}
+      {row && (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
+          {DEM_STATUSES.map(s => {
+            const active = row.status === s.v
+            const [bg, col] = STATUS_COLORS[s.v] ?? ['#1a1a1a', '#444']
+            return (
+              <button key={s.v} onClick={() => setStatus(s.v)}
+                style={{ padding: '3px 8px', fontSize: 10, fontWeight: 600, borderRadius: 4, cursor: 'pointer', border: 'none',
+                  background: active ? bg : '#1a1a1a', color: active ? col : '#444',
+                  outline: active ? `1px solid ${col}44` : 'none' }}>
+                {s.l}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {matchResult && (
+        <p style={{ fontSize: 12, color: matchResult.startsWith('✅') ? '#86efac' : '#f87171', margin: '0 0 8px', padding: '6px 8px', background: '#0d0d0d', borderRadius: 4 }}>
+          {matchResult}
+        </p>
+      )}
+
+      {row?.ai_summary && !editMode && <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 8px', fontStyle: 'italic' }}>{row.ai_summary}</p>}
+
+      {editMode ? editFields : staticView}
+
+      {editMode && (
+        <>
+          {err && <p style={{ fontSize: 12, color: '#f87171', margin: '0 0 8px' }}>{err}</p>}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+            <button onClick={save} disabled={saving}
+              style={{ padding: '7px 16px', background: RED, color: '#fff', border: 'none', borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.6 : 1 }}>
+              {saving ? 'Αποθήκευση…' : 'Αποθήκευση'}
+            </button>
+            {isNew && onCancel && <button onClick={onCancel} style={btnS('#1e1e1e', '#666')}>Ακύρωση</button>}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -428,18 +513,17 @@ function DemandCard({ row, onSaved }: { row: DemandRow; onSaved: () => void }) {
 // ── Page ──────────────────────────────────────────────────────────
 
 export default function PersonalAdminPage() {
-  const [tab,         setTab]         = useState<'properties'|'demand'>('properties')
-  const [properties,  setProperties]  = useState<PropertyRow[]>([])
-  const [demands,     setDemands]     = useState<DemandRow[]>([])
-  const [loading,     setLoading]     = useState(true)
-  const [loadError,   setLoadError]   = useState<string|null>(null)
-  const [userId,      setUserId]      = useState<string|null>(null)
-  const [showManual,  setShowManual]  = useState(false)
+  const [tab,        setTab]        = useState<'properties' | 'demand'>('properties')
+  const [properties, setProperties] = useState<PropertyRow[]>([])
+  const [demands,    setDemands]    = useState<DemandRow[]>([])
+  const [loading,    setLoading]    = useState(true)
+  const [loadError,  setLoadError]  = useState<string | null>(null)
+  const [userId,     setUserId]     = useState<string | null>(null)
+  const [showNew,    setShowNew]    = useState(false)
+  const [search,     setSearch]     = useState('')
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUserId(session?.user?.id ?? null)
-    })
+    supabase.auth.getSession().then(({ data: { session } }) => setUserId(session?.user?.id ?? null))
   }, [])
 
   const load = useCallback(async () => {
@@ -450,15 +534,15 @@ export default function PersonalAdminPage() {
         .select('id,ilist_id,title,owner_name,owner_phone,owner_email,transaction_type,address,area,floor,sqm,rooms,condition,year_built,year_renovated,balcony,parking,security_door,asking_price,seller_motivation,ai_summary,status,voice_note_ids,created_at,updated_at')
         .eq('agent_id', userId)
         .order('created_at', { ascending: false })
-        .limit(100),
+        .limit(200),
       supabase.from('demand_profiles')
         .select('id,client_name,client_phone,client_email,transaction_type,property_type,budget_eur,size_min,size_max,floor_min,floor_max,areas_preferred,must_have,nice_to_have,condition_req,ai_summary,status,updated_at,voice_note_ids')
         .eq('agent_id', userId)
         .order('updated_at', { ascending: false })
-        .limit(100),
+        .limit(200),
     ])
     if (propsRes.error) setLoadError(`Ακίνητα: ${propsRes.error.message}`)
-    if (demsRes.error)  setLoadError(e => e ? e+' | '+demsRes.error!.message : `Ζητήσεις: ${demsRes.error!.message}`)
+    if (demsRes.error)  setLoadError(e => e ? e + ' | ' + demsRes.error!.message : `Ζητήσεις: ${demsRes.error!.message}`)
     setProperties((propsRes.data ?? []) as PropertyRow[])
     setDemands((demsRes.data ?? []) as DemandRow[])
     setLoading(false)
@@ -466,69 +550,87 @@ export default function PersonalAdminPage() {
 
   useEffect(() => { load() }, [load])
 
-  function afterSave() { setShowManual(false); load() }
+  function afterSave() { setShowNew(false); load() }
+
+  const q = search.toLowerCase().trim()
+
+  const filteredProps = useMemo(() => !q ? properties : properties.filter(r =>
+    [r.owner_name, r.owner_phone, r.address, r.area, r.ilist_id, r.owner_email]
+      .some(f => f?.toLowerCase().includes(q))
+  ), [properties, q])
+
+  const filteredDems = useMemo(() => !q ? demands : demands.filter(r =>
+    [r.client_name, r.client_phone, r.client_email, ...(r.areas_preferred ?? [])]
+      .some(f => f?.toLowerCase().includes(q))
+  ), [demands, q])
 
   return (
-    <div style={{ minHeight:'100vh', background:'#0a0a0a', color:'#f0f0f0', padding:'24px 16px', maxWidth:680, margin:'0 auto' }}>
+    <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#f0f0f0', padding: '20px 14px', maxWidth: 680, margin: '0 auto' }}>
 
       {/* Header */}
-      <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:20, flexWrap:'wrap', gap:12 }}>
-        <div>
-          <h1 style={{ fontSize:20, fontWeight:700, margin:0, letterSpacing:'-0.02em' }}>Personal Admin</h1>
-          <p style={{ fontSize:12, color:'#444', marginTop:4 }}>Οι καταγραφές σου — φωνή, χειροκίνητα, ή Excel</p>
-        </div>
-        <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-          <VoiceMemoButton onSuccess={load} />
-        </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, gap: 10 }}>
+        <h1 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>Personal Admin</h1>
+        <VoiceMemoButton onSuccess={load} />
       </div>
 
-      {/* Tabs + manual add button */}
-      <div style={{ display:'flex', gap:4, marginBottom:12, borderBottom:'1px solid #1e1e1e', alignItems:'flex-end' }}>
-        {(['properties','demand'] as const).map(t => (
-          <button key={t} onClick={()=>{setTab(t);setShowManual(false)}}
-            style={{ padding:'7px 14px', fontSize:13, background:'none', border:'none',
-              color:tab===t?'#f0f0f0':'#555', cursor:'pointer', fontWeight:tab===t?600:400,
-              borderBottom:tab===t?`2px solid ${RED}`:'2px solid transparent', marginBottom:-1 }}>
-            {t==='properties'?`Ακίνητα (${properties.length})`:`Ζητήσεις (${demands.length})`}
+      {/* Search */}
+      <div style={{ position: 'relative', marginBottom: 10 }}>
+        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#444', pointerEvents: 'none', fontSize: 13 }}>🔍</span>
+        <input
+          value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Αναζήτηση — όνομα, τηλ., περιοχή, διεύθυνση…"
+          style={{ width: '100%', boxSizing: 'border-box', padding: '8px 32px', background: '#111', border: '1px solid #1e1e1e', borderRadius: 7, color: '#e0e0e0', fontSize: 13, outline: 'none' }}
+        />
+        {search && (
+          <button onClick={() => setSearch('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#444', cursor: 'pointer', fontSize: 14, padding: 0 }}>✕</button>
+        )}
+      </div>
+
+      {/* Tabs + New button */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 10, borderBottom: '1px solid #1a1a1a', alignItems: 'flex-end' }}>
+        {(['properties', 'demand'] as const).map(t => (
+          <button key={t} onClick={() => { setTab(t); setShowNew(false) }}
+            style={{ padding: '6px 13px', fontSize: 13, background: 'none', border: 'none',
+              color: tab === t ? '#f0f0f0' : '#555', cursor: 'pointer', fontWeight: tab === t ? 600 : 400,
+              borderBottom: tab === t ? `2px solid ${RED}` : '2px solid transparent', marginBottom: -1 }}>
+            {t === 'properties' ? `Ακίνητα (${filteredProps.length})` : `Ζητήσεις (${filteredDems.length})`}
           </button>
         ))}
-        <div style={{ marginLeft:'auto', paddingBottom:4 }}>
-          <button onClick={()=>setShowManual(p=>!p)}
-            style={{ padding:'5px 12px', fontSize:12, background: showManual?'#2a0a0a':RED, color:'#fff', border:'none', borderRadius:5, cursor:'pointer', fontWeight:600 }}>
-            {showManual ? '✕ Κλείσιμο' : '+ Χειροκίνητη'}
+        <div style={{ marginLeft: 'auto', paddingBottom: 4 }}>
+          <button onClick={() => setShowNew(p => !p)}
+            style={{ padding: '5px 12px', fontSize: 12, background: showNew ? '#1a0a0a' : RED, color: '#fff', border: 'none', borderRadius: 5, cursor: 'pointer', fontWeight: 600 }}>
+            {showNew ? '✕' : '+ Νέο'}
           </button>
         </div>
       </div>
 
-      {/* Manual entry form */}
-      {showManual && tab === 'properties' && <ManualPropertyForm onSaved={afterSave} onCancel={()=>setShowManual(false)} />}
-      {showManual && tab === 'demand'     && <ManualDemandForm   onSaved={afterSave} onCancel={()=>setShowManual(false)} />}
+      {loading   && <p style={{ color: '#444', fontSize: 13 }}>Φόρτωση…</p>}
+      {loadError && <p style={{ fontSize: 12, color: '#f87171', marginBottom: 10, padding: '8px 10px', background: '#1a0000', borderRadius: 6 }}>⚠ {loadError}</p>}
 
-      {loading    && <p style={{ color:'#444', fontSize:13 }}>Φόρτωση…</p>}
-      {loadError  && <p style={{ fontSize:12, color:'#f87171', marginBottom:12, padding:'8px 10px', background:'#1a0000', borderRadius:6 }}>⚠ {loadError}</p>}
+      {/* New entry */}
+      {showNew && tab === 'properties' && <PropertyCard row={null} isNew onSaved={afterSave} onCancel={() => setShowNew(false)} />}
+      {showNew && tab === 'demand'     && <DemandCard   row={null} isNew onSaved={afterSave} onCancel={() => setShowNew(false)} />}
 
+      {/* Lists */}
       {!loading && tab === 'properties' && (
         <>
-          {properties.length === 0 && !showManual && (
-            <div style={{ textAlign:'center', padding:'50px 0', color:'#444' }}>
-              <p style={{ fontSize:28 }}>🎙</p>
-              <p style={{ fontSize:14 }}>Κανένα ακίνητο ακόμα.</p>
-              <p style={{ fontSize:12, color:'#333' }}>Χρησιμοποίησε το μικρόφωνο ή το κουμπί "+ Χειροκίνητη".</p>
-            </div>
+          {filteredProps.length === 0 && !showNew && (
+            <p style={{ textAlign: 'center', color: '#333', fontSize: 13, paddingTop: 40 }}>
+              {search ? 'Κανένα αποτέλεσμα.' : 'Κανένα ακίνητο — πάτα + Νέο ή μίλα.'}
+            </p>
           )}
-          {properties.map(row => <PropertyCard key={row.id} row={row} onSaved={load} />)}
+          {filteredProps.map(row => <PropertyCard key={row.id} row={row} onSaved={load} />)}
         </>
       )}
 
       {!loading && tab === 'demand' && (
         <>
-          {demands.length === 0 && !showManual && (
-            <div style={{ textAlign:'center', padding:'50px 0', color:'#444' }}>
-              <p style={{ fontSize:28 }}>🎙</p>
-              <p style={{ fontSize:14 }}>Καμία ζήτηση ακόμα.</p>
-            </div>
+          {filteredDems.length === 0 && !showNew && (
+            <p style={{ textAlign: 'center', color: '#333', fontSize: 13, paddingTop: 40 }}>
+              {search ? 'Κανένα αποτέλεσμα.' : 'Καμία ζήτηση — πάτα + Νέο.'}
+            </p>
           )}
-          {demands.map(row => <DemandCard key={row.id} row={row} onSaved={load} />)}
+          {filteredDems.map(row => <DemandCard key={row.id} row={row} onSaved={load} />)}
         </>
       )}
     </div>
