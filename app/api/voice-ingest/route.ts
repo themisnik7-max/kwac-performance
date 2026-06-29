@@ -223,7 +223,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok:          true,
     intent,
-    note_id:     note.id,
+    note_id:     note?.id ?? null,
     property_id: upsertedId,
     summary:     (fields.ai_summary as string) ?? transcript.slice(0, 120),
   })
