@@ -143,7 +143,10 @@ export async function POST(req: NextRequest) {
         .insert({ ...payload, ilist_id: 'VOC-' + Date.now() })
         .select('id')
         .single()
-      if (insErr) console.error('[voice-ingest] mp insert', insErr)
+      if (insErr) {
+        console.error('[voice-ingest] mp insert', insErr)
+        return NextResponse.json({ error: `DB insert failed: ${insErr.message}` }, { status: 500 })
+      }
       upsertedId = mp?.id ?? null
 
       if (upsertedId) {

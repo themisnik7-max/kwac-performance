@@ -255,10 +255,33 @@ function PropertyCard({ row, onSaved }: { row: PropertyRow; onSaved: () => void 
 // ── Demand card ───────────────────────────────────────────────────
 
 function DemandCard({ row, onSaved }: { row: DemandRow; onSaved: () => void }) {
-  const [editing, setEditing] = useState(false)
-  const [state,   setState]   = useState<EditState>({})
-  const [saving,  setSaving]  = useState(false)
-  const [err,     setErr]     = useState<string | null>(null)
+  const [editing,    setEditing]    = useState(false)
+  const [state,      setState]      = useState<EditState>({})
+  const [saving,     setSaving]     = useState(false)
+  const [err,        setErr]        = useState<string | null>(null)
+  const [matching,   setMatching]   = useState(false)
+  const [matchResult,setMatchResult]= useState<string | null>(null)
+
+  async function testMatch() {
+    setMatching(true); setMatchResult(null)
+    const { data: { session } } = await supabase.auth.getSession()
+    if (!session) { setMatchResult('Δεν βρέθηκε session'); setMatching(false); return }
+    try {
+      const res  = await fetch('/api/demand-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body:    JSON.stringify({ demand_id: row.id }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setMatchResult(`Σφάλμα: ${data.error}`); setMatching(false); return }
+      setMatchResult(
+        data.matched === 0
+          ? 'Κανένα ταίριασμα βρέθηκε με ενεργά ακίνητα.'
+          : `✅ ${data.matched} ακίνητ${data.matched === 1 ? 'ο' : 'α'} ταίριαξαν${data.email_sent ? ' — email στάλθηκε!' : row.client_email ? ' (email ΔΕΝ στάλθηκε — έλεγξε BREVO_API_KEY)' : ' — δεν υπάρχει email πελάτη'}`
+      )
+    } catch (e) { setMatchResult(`Σφάλμα: ${e}`) }
+    setMatching(false)
+  }
 
   function startEdit() { setState(toEditState(row as unknown as Record<string, unknown>)); setEditing(true); setErr(null) }
   function cancel()    { setEditing(false) }
@@ -313,11 +336,15 @@ function DemandCard({ row, onSaved }: { row: DemandRow; onSaved: () => void }) {
           <span style={{ fontSize: 15, fontWeight: 600, color: '#f0f0f0' }}>{row.client_name ?? 'Άγνωστος Πελάτης'}</span>
           {row.client_phone && <span style={{ fontSize: 12, color: '#555', marginLeft: 10 }}>{row.client_phone}</span>}
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <StatusBadge s={row.status} />
+          <button onClick={testMatch} disabled={matching} style={{ padding: '3px 9px', fontSize: 11, background: '#1c2e1c', border: '1px solid #166534', borderRadius: 4, color: '#86efac', cursor: matching ? 'not-allowed' : 'pointer', opacity: matching ? 0.6 : 1 }}>
+            {matching ? '⏳' : '📧 Test Match'}
+          </button>
           <button onClick={startEdit} style={{ padding: '3px 9px', fontSize: 11, background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 4, color: '#888', cursor: 'pointer' }}>✏ Επεξ.</button>
         </div>
       </div>
+      {matchResult && <p style={{ fontSize: 12, color: matchResult.startsWith('✅') ? '#86efac' : '#f87171', margin: '0 0 8px', padding: '6px 8px', background: '#0d0d0d', borderRadius: 4 }}>{matchResult}</p>}
       {row.ai_summary && <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 10px', fontStyle: 'italic' }}>{row.ai_summary}</p>}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '6px 14px' }}>
         <div><p style={LABEL}>Τύπος</p><p style={VAL}>{row.transaction_type === 'buy' ? 'Αγορά' : row.transaction_type === 'rent' ? 'Ενοίκιο' : '—'}</p></div>
@@ -341,6 +368,7 @@ export default function PersonalAdminPage() {
   const [properties,setProperties]= useState<PropertyRow[]>([])
   const [demands,   setDemands]   = useState<DemandRow[]>([])
   const [loading,   setLoading]   = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [userId,    setUserId]    = useState<string | null>(null)
 
   // Get current user id on mount
@@ -353,11 +381,12 @@ export default function PersonalAdminPage() {
   const load = useCallback(async () => {
     if (!userId) return
     setLoading(true)
-    const [{ data: props }, { data: dems }] = await Promise.all([
+    setLoadError(null)
+    const [propsRes, demsRes] = await Promise.all([
       supabase
         .from('meeting_properties')
         .select('id,ilist_id,title,owner_name,owner_phone,owner_email,transaction_type,address,area,floor,sqm,rooms,condition,year_built,year_renovated,balcony,parking,security_door,asking_price,seller_motivation,ai_summary,status,voice_note_ids,created_at,updated_at')
-        .eq('agent_id', userId)               // personal: only own records
+        .eq('agent_id', userId)
         .order('created_at', { ascending: false })
         .limit(100),
       supabase
@@ -367,8 +396,10 @@ export default function PersonalAdminPage() {
         .order('updated_at', { ascending: false })
         .limit(100),
     ])
-    setProperties((props ?? []) as PropertyRow[])
-    setDemands((dems ?? []) as DemandRow[])
+    if (propsRes.error) setLoadError(`Ακίνητα: ${propsRes.error.message}`)
+    if (demsRes.error)  setLoadError(e => e ? e + ` | Ζητήσεις: ${demsRes.error!.message}` : `Ζητήσεις: ${demsRes.error!.message}`)
+    setProperties((propsRes.data ?? []) as PropertyRow[])
+    setDemands((demsRes.data ?? []) as DemandRow[])
     setLoading(false)
   }, [userId])
 
@@ -407,6 +438,8 @@ export default function PersonalAdminPage() {
       </div>
 
       {loading && <p style={{ color: '#444', fontSize: 13 }}>Φόρτωση…</p>}
+      {loadError && <p style={{ fontSize: 12, color: '#f87171', marginBottom: 12, padding: '8px 10px', background: '#1a0000', borderRadius: 6 }}>⚠ {loadError}</p>}
+      {!loading && !loadError && userId && <p style={{ fontSize: 10, color: '#222', marginBottom: 8 }}>user: {userId.slice(0,8)}…</p>}
 
       {!loading && tab === 'properties' && (
         <>
