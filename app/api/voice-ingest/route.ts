@@ -187,9 +187,9 @@ export async function POST(req: NextRequest) {
       size_max:         (fields.size_max         as number)   ?? null,
       budget_eur:       (fields.budget_eur       as number)   ?? null,
       condition_req:    (fields.condition_req    as string)   ?? null,
-      must_have:        (fields.must_have        as string[]) ?? [],
-      nice_to_have:     (fields.nice_to_have     as string[]) ?? [],
-      areas_preferred:  (fields.areas_preferred  as string[]) ?? [],
+      must_have:        (Array.isArray(fields.must_have)       ? fields.must_have       : []) as string[],
+      nice_to_have:     (Array.isArray(fields.nice_to_have)    ? fields.nice_to_have    : []) as string[],
+      areas_preferred:  (Array.isArray(fields.areas_preferred) ? fields.areas_preferred : []) as string[],
       ai_summary:       (fields.ai_summary       as string)   ?? null,
     }
 
@@ -207,16 +207,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Fire-and-forget auto-match (non-blocking — client gets response immediately)
+    // Auto-match: call demand-match handler directly (no HTTP round-trip needed)
     if (demandId) {
-      const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : 'http://localhost:3000'
-      fetch(`${baseUrl}/api/demand-match`, {
-        method:  'POST',
+      const matchReq = new Request('http://internal/api/demand-match', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ demand_id: demandId }),
-      }).catch(err => console.error('[voice-ingest] demand-match trigger', err))
+        body: JSON.stringify({ demand_id: demandId }),
+      })
+      import('@/app/api/demand-match/route').then(m => m.POST(matchReq as never))
+        .catch(err => console.error('[voice-ingest] auto-match', err))
     }
   }
 

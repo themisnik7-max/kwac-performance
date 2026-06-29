@@ -50,8 +50,11 @@ type MatchedProperty = {
 function scoreMatch(demand: DemandProfile, prop: MatchedProperty): number {
   let score = 0
 
-  // Transaction type must match
-  if (demand.transaction_type && demand.transaction_type !== prop.transaction_type) return 0
+  // Transaction type must match — map demand side ('buy'→'sale') to property side
+  if (demand.transaction_type && prop.transaction_type) {
+    const demandSide = demand.transaction_type === 'buy' ? 'sale' : demand.transaction_type
+    if (demandSide !== prop.transaction_type) return 0
+  }
 
   // Budget: property asking_price must be within budget (with 15% flexibility)
   if (demand.budget_eur && prop.asking_price) {
