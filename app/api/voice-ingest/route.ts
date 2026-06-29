@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   const propertyId = body.property_id as string | null | undefined
   const meetingId  = body.meeting_id  as string | null | undefined
 
-  if (!transcript) return NextResponse.json({ error: 'No transcript' }, { status: 400 })
+  if (!transcript) return NextResponse.json({ error: 'No transcript or intent provided' }, { status: 400 })
 
   // 4. Audit log in voice_notes
   const { data: note, error: noteErr } = await db
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
       address:           (fields.address           as string) ?? null,
       area:              (fields.area              as string) ?? null,
       floor:             (fields.floor             as number) ?? null,
-      sqm:               (fields.size_sqm          as number) ?? null,
+      sqm:               (fields.sqm ?? fields.size_sqm as number) ?? null,
       condition:         (fields.condition         as string) ?? null,
       year_built:        (fields.year_built        as number) ?? null,
       year_renovated:    (fields.year_renovated    as number) ?? null,
