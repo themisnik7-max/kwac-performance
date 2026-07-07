@@ -8,12 +8,14 @@ const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 
 type TrainRow = { input: PricingInputRow; ppsqm: number; weight: number; isRealSale: boolean }
 
-// Trains the small neural-net pricing model (lib/miniNet.ts) on every real
-// price this agency and the government registry can supply, plus agent
-// feedback estimates as lower-weighted soft examples — the concrete
-// mechanism behind "reinforced by agent feedback": each retrain literally
-// folds meeting_comments.agent_estimate into the gradient, weighted below
-// real closed sales. Admin/CEO-triggered (matches valuation-backtest,
+// Trains the small neural-net pricing model (lib/miniNet.ts). By explicit
+// product decision, only two data sources are allowed to influence it: the
+// government registry (real closed transactions) and top-producer feedback
+// — the agency's own `properties` listings (mostly still-active asking
+// prices, not proven sales) and non-top-producer comments are excluded on
+// purpose, even though anyone can vote/comment in Meeting Ακινήτων (see
+// /api/meeting-comments — that's now open to everyone, filtered out here
+// instead of at write time). Admin/CEO-triggered (matches valuation-backtest,
 // import-registry) rather than automatic, since a retrain changes what price
 // every future valuation suggests — that's a deliberate action, not a
 // background job.
@@ -24,23 +26,7 @@ export async function POST(req: NextRequest) {
 
   const rows: TrainRow[] = []
 
-  // 1. The agency's own real closed sales — highest-trust signal, but today
-  // only a couple of rows exist (see route comment history / ARCHITECTURE.md).
-  const { data: ownSales } = await sb
-    .from('properties')
-    .select('area, sqm, floor, year_built, year_renovated, condition, balcony, utilization_score, lat, lng, price_final, price_asking, created_at')
-    .eq('agency_id', caller.agency_id).eq('deal_type', 'sale').eq('status', 'sold')
-    .not('sqm', 'is', null).gt('sqm', 0)
-  for (const r of ownSales || []) {
-    const price = r.price_final ?? r.price_asking
-    if (!price || price <= 0) continue
-    rows.push({
-      input: { area: r.area, sqm: r.sqm, floor: r.floor, year_built: r.year_built, year_renovated: r.year_renovated, condition: r.condition, balcony: r.balcony, utilization_score: r.utilization_score, lat: r.lat, lng: r.lng, asOf: new Date(r.created_at).getTime() },
-      ppsqm: price / r.sqm, weight: 1.0, isRealSale: true,
-    })
-  }
-
-  // 2. Government registry — real transaction prices, no condition/balcony/
+  // 1. Government registry — real transaction prices, no condition/balcony/
   // utilization/coordinates, but the volume (tens of thousands of rows) is
   // what actually makes this a trainable network rather than a curve fit
   // through two points.
@@ -56,18 +42,29 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  // 3. Agent feedback (meeting_comments.agent_estimate) — opinions, not
-  // closed sales, so weighted well below real prices and never used for
-  // holdout evaluation (see split below).
-  const { data: feedbackRows } = await sb
+  // 2. Top-producer feedback only (meeting_comments.agent_estimate) —
+  // opinions, not closed sales, so weighted well below real prices and never
+  // used for holdout evaluation (see split below). Filtered per-area against
+  // top_producers_by_area, the same RPC the live valuation route uses, so
+  // "counts toward training" means the same thing in both places.
+  const { data: feedbackRowsRaw } = await sb
     .from('meeting_comments')
-    .select('agent_estimate, meeting_properties!inner(area, sqm, floor, year_built, year_renovated, condition, balcony, utilization_score, lat, lng, agency_id)')
+    .select('agent_id, agent_estimate, meeting_properties!inner(area, sqm, floor, year_built, year_renovated, condition, balcony, utilization_score, lat, lng, agency_id)')
     .eq('meeting_properties.agency_id', caller.agency_id)
     .not('agent_estimate', 'is', null).gt('agent_estimate', 0)
+
+  const distinctAreas: string[] = Array.from(new Set((feedbackRowsRaw as any[] || []).map(c => c.meeting_properties?.area).filter(Boolean)))
+  const topProducerIdsByArea = new Map<string, Set<string>>()
+  for (const area of distinctAreas) {
+    const { data: tp } = await sb.rpc('top_producers_by_area', { p_area: area })
+    topProducerIdsByArea.set(area, new Set((tp || []).map((t: any) => t.agent_id).filter(Boolean)))
+  }
+
   const feedbackTrainRows: TrainRow[] = []
-  for (const c of (feedbackRows as any[]) || []) {
+  for (const c of (feedbackRowsRaw as any[]) || []) {
     const p = c.meeting_properties
     if (!p?.sqm || p.sqm <= 0) continue
+    if (!topProducerIdsByArea.get(p.area)?.has(c.agent_id)) continue // not a top producer of this area — history only, not training
     feedbackTrainRows.push({
       input: { area: p.area, sqm: p.sqm, floor: p.floor, year_built: p.year_built, year_renovated: p.year_renovated, condition: p.condition, balcony: p.balcony, utilization_score: p.utilization_score, lat: p.lat, lng: p.lng },
       ppsqm: c.agent_estimate / p.sqm, weight: 0.3, isRealSale: false,

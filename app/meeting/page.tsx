@@ -4,6 +4,7 @@ import Shell from '@/components/Shell'
 import { useApp } from '@/lib/AppContext'
 import { createClient } from '@/lib/supabase'
 import { authedFetch } from '@/lib/authedFetch'
+import { PropertyPhotoUpload } from '@/components/PropertyPhotoUpload'
 
 const COND_LABELS: Record<string, string> = {
   excellent: 'Αριστη', good: 'Καλη', fair: 'Μετρια', needs_work: 'Χρειαζεται εργασιες'
@@ -18,7 +19,7 @@ function mapsUrl(address: string | null | undefined) {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: '#888',
+  pending: '#6B7280',
   for_appraisal: '#B45309',
   estimated: '#185FA5',
   completed: '#3B6D11'
@@ -40,6 +41,7 @@ export default function MeetingPage() {
   const [topProducers, setTopProducers] = useState<any[]>([])
   const [loading, setLoading]       = useState(true)
   const [estimating, setEstimating] = useState(false)
+  const [valuationError, setValuationError] = useState('')
   const [importing, setImporting]   = useState(false)
   const [myComment, setMyComment]   = useState('')
   const [myEstimate, setMyEstimate] = useState('')
@@ -54,7 +56,17 @@ export default function MeetingPage() {
   useEffect(() => { fetchProps() }, [])
   useEffect(() => {
     if (selected) {
-      fetchValuation(selected.id)
+      fetchValuation(selected.id).then(v => {
+        // "Already estimated by the time you open it" — admin no longer has
+        // to remember to click AI Εκτίμηση for every property; it runs once,
+        // automatically, the first time an admin opens a for_appraisal
+        // property with no valuation yet. Still admin-only server-side
+        // (isCeoOrAdmin in the route), so this is a no-op for other agents —
+        // they just see the empty state until an admin has visited it once.
+        if (!v && isAdmin && (selected.status === 'for_appraisal' || selected.status === 'estimated')) {
+          runEstimationFor(selected.id)
+        }
+      })
       fetchComments(selected.id)
       if (selected.area) fetchTopProducers(selected.area)
     }
@@ -80,8 +92,9 @@ export default function MeetingPage() {
       .from('meeting_valuations')
       .select('*')
       .eq('property_id', pid)
-      .single()
+      .maybeSingle()
     setValuation(data)
+    return data
   }
 
   async function fetchComments(pid: string) {
@@ -102,37 +115,52 @@ export default function MeetingPage() {
   // ─── Visibility filter ────────────────────────────────────────────────────
   // RLS handles server-side enforcement. Client-side filter adds search.
   // Non-owners see only for_appraisal (RLS already enforces this).
-  // When searching: filter by agent full_name.
+  // When searching: match agent name, address, or area (Attica-only data
+  // for now, so no separate region field needed).
   const visibleProps = useMemo(() => {
     if (!search.trim()) return props
     const q = search.toLowerCase()
     return props.filter(p =>
-      (p.agents?.full_name || '').toLowerCase().includes(q)
+      (p.agents?.full_name || '').toLowerCase().includes(q) ||
+      (p.address || '').toLowerCase().includes(q) ||
+      (p.area || '').toLowerCase().includes(q)
     )
   }, [props, search])
 
   // ─── Actions ──────────────────────────────────────────────────────────────
 
-  async function runEstimation() {
-    if (!selected) return
+  async function runEstimationFor(propertyId: string) {
     setEstimating(true)
+    setValuationError('')
     try {
       const res = await authedFetch('/api/meeting-valuation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ property_id: selected.id })
+        body: JSON.stringify({ property_id: propertyId })
       })
       const data = await res.json()
       if (data.success) {
-        setValuation({ ...data.valuation, top_producers: data.top_producers, comparables: data.comparables })
-        if (data.top_producers?.length) setTopProducers(data.top_producers)
+        if (selected?.id === propertyId) {
+          setValuation({ ...data.valuation, top_producers: data.top_producers, comparables: data.comparables })
+          if (data.top_producers?.length) setTopProducers(data.top_producers)
+        }
         showToast('✅ Εκτιμηση ολοκληρωθηκε!')
       } else {
+        // Error stays visible in the panel itself, not just a 3s toast — a
+        // silent/missed toast was indistinguishable from "the button does
+        // nothing," which is what this was reported as.
+        setValuationError(data.error || 'Σφάλμα εκτίμησης')
         showToast('❌ ' + (data.error || 'Σφαλμα'))
       }
-    } catch { showToast('❌ Σφαλμα δικτυου') }
+    } catch {
+      setValuationError('Σφάλμα δικτύου — δοκιμάστε ξανά.')
+      showToast('❌ Σφαλμα δικτυου')
+    }
     setEstimating(false)
     fetchProps()
+  }
+  function runEstimation() {
+    if (selected) runEstimationFor(selected.id)
   }
 
   async function toggleForAppraisal(p: any) {
@@ -243,13 +271,28 @@ export default function MeetingPage() {
     setTimeout(() => setToast(''), 3000)
   }
 
+  // Admin-only: finalize review and jump to the next property still waiting
+  // in the queue (for_appraisal or already-estimated-but-not-completed),
+  // instead of leaving the admin to manually reselect from the list each time.
+  async function completeAppraisal() {
+    if (!selected) return
+    const { error } = await sb.from('meeting_properties').update({ status: 'completed' }).eq('id', selected.id)
+    if (error) { showToast('❌ ' + error.message); return }
+    showToast('✅ Ολοκληρώθηκε η εκτίμηση')
+    const next = props.find(p => p.id !== selected.id && (p.status === 'for_appraisal' || p.status === 'estimated'))
+    setProps(prev => prev.map(p => p.id === selected.id ? { ...p, status: 'completed' } : p))
+    setSelected(next || null)
+  }
+
   // ─── Derived state ────────────────────────────────────────────────────────
   const isSelectedOwner = selected?.agent_id === agent?.id
-  // Comments require a valuation to react to, and are restricted to the
-  // area's top producers (or admin) — see app/api/meeting-comments/route.ts
-  // for the server-side enforcement this mirrors, including the fallback for
-  // when top-producer data isn't available yet.
-  const canComment = !!valuation && (isAdmin || topProducers.length === 0 || topProducers.some((tp: any) => tp.agent_id === agent?.id))
+  // Anyone can vote/comment once a valuation exists — top-producer status no
+  // longer gates who may write here (see app/api/meeting-comments/route.ts).
+  // Whether a given comment actually moves the price is decided separately,
+  // downstream, in meeting-valuation / pricing-model/train.
+  const canComment = !!valuation
+  const topProducerIds = useMemo(() => new Set(topProducers.map((tp: any) => tp.agent_id).filter(Boolean)), [topProducers])
+  const agreePct = comments.length ? Math.round((comments.filter(c => c.agrees_with_ai).length / comments.length) * 100) : null
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -260,7 +303,7 @@ export default function MeetingPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', margin: 0 }}>Μιτινγκ Ακινητων</h1>
-            <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>AI εκτιμηση + feedback απο top producers</p>
+            <p style={{ color: '#6B7280', fontSize: 14, margin: '4px 0 0' }}>AI εκτιμηση + feedback απο top producers</p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button onClick={addManual}
@@ -290,22 +333,22 @@ export default function MeetingPage() {
 
             {/* Search bar */}
             <div style={{ position: 'relative' }}>
-              <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 14, color: '#bbb', pointerEvents: 'none' }}>🔍</span>
+              <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 14, color: '#6B7280', pointerEvents: 'none' }}>🔍</span>
               <input
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Αναζητηση ονοματος μεσιτη..."
+                placeholder="Αναζητηση μεσίτη, διεύθυνσης ή περιοχής..."
                 style={{ width: '100%', padding: '8px 32px', border: '0.5px solid #ddd', borderRadius: 8, fontSize: 13, boxSizing: 'border-box', outline: 'none' }}
               />
               {search && (
                 <button onClick={() => setSearch('')}
-                  style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#bbb', fontSize: 18, lineHeight: 1, padding: 0 }}>
+                  style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#6B7280', fontSize: 18, lineHeight: 1, padding: 0 }}>
                   ×
                 </button>
               )}
             </div>
             {search.trim() && (
-              <div style={{ fontSize: 11, color: '#888', paddingLeft: 2 }}>
+              <div style={{ fontSize: 11, color: '#6B7280', paddingLeft: 2 }}>
                 {visibleProps.length} ακινητα για &quot;{search}&quot;
               </div>
             )}
@@ -313,23 +356,23 @@ export default function MeetingPage() {
             {/* Scrollable list */}
             <div style={{ overflowY: 'auto', flex: 1, paddingRight: 2, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {loading ? (
-                <div style={{ color: '#bbb', fontSize: 14, padding: '2rem', textAlign: 'center' }}>Φορτωση...</div>
+                <div style={{ color: '#6B7280', fontSize: 14, padding: '2rem', textAlign: 'center' }}>Φορτωση...</div>
               ) : visibleProps.length === 0 ? (
                 <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '2.5rem', textAlign: 'center' }}>
                   <div style={{ fontSize: 32, marginBottom: 10 }}>🏠</div>
                   <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 6 }}>
                     {search ? 'Κανενα αποτελεσμα' : 'Κανενα ακινητο'}
                   </div>
-                  <div style={{ fontSize: 13, color: '#888' }}>
+                  <div style={{ fontSize: 13, color: '#6B7280' }}>
                     {search
-                      ? `Δεν βρεθηκε μεσιτης με το ονομα "${search}"`
+                      ? `Καμία αντιστοιχία μεσίτη, διεύθυνσης ή περιοχής για "${search}"`
                       : 'Ανεβαστε Excel απο iList η προσθεστε χειροκινητα'}
                   </div>
                 </div>
               ) : visibleProps.map(p => {
                 const isOwner = p.agent_id === agent?.id
                 const maps = mapsUrl(p.address)
-                const statusColor = STATUS_COLORS[p.status] || '#888'
+                const statusColor = STATUS_COLORS[p.status] || '#6B7280'
                 const statusLabel = STATUS_LABELS[p.status] || p.status
 
                 return (
@@ -379,7 +422,7 @@ export default function MeetingPage() {
                     {/* Location + Maps link */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       {p.area && (
-                        <span style={{ fontSize: 12, color: '#888' }}>
+                        <span style={{ fontSize: 12, color: '#6B7280' }}>
                           📍 {p.area}{p.sqm ? ' · ' + p.sqm + 'τμ' : ''}
                         </span>
                       )}
@@ -399,7 +442,7 @@ export default function MeetingPage() {
                       </div>
                     )}
                     {p.ilist_id && (
-                      <div style={{ fontSize: 11, color: '#bbb', marginTop: 2 }}>#{p.ilist_id}</div>
+                      <div style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>#{p.ilist_id}</div>
                     )}
                   </div>
                 )
@@ -420,7 +463,7 @@ export default function MeetingPage() {
                     {selected.agents?.full_name && (
                       <div style={{ fontSize: 12, color: '#CC2229', fontWeight: 600, marginBottom: 4 }}>
                         Μεσιτης: {selected.agents.full_name}
-                        {isSelectedOwner && <span style={{ color: '#888', fontWeight: 400 }}> (εσυ)</span>}
+                        {isSelectedOwner && <span style={{ color: '#6B7280', fontWeight: 400 }}> (εσυ)</span>}
                       </div>
                     )}
                     <h2 style={{ fontSize: 16, fontWeight: 500, margin: 0 }}>{selected.title}</h2>
@@ -439,12 +482,12 @@ export default function MeetingPage() {
                       </a>
                     )}
                     {selected.ilist_id && (
-                      <span style={{ fontSize: 11, color: '#bbb', padding: '5px 8px', background: '#f8f8f7', borderRadius: 6 }}>
+                      <span style={{ fontSize: 11, color: '#6B7280', padding: '5px 8px', background: '#f8f8f7', borderRadius: 6 }}>
                         #{selected.ilist_id}
                       </span>
                     )}
                     <button onClick={() => setSelected(null)}
-                      style={{ padding: '5px 10px', background: 'none', border: '0.5px solid #e8e8e8', borderRadius: 6, fontSize: 14, cursor: 'pointer', color: '#888' }}>
+                      style={{ padding: '5px 10px', background: 'none', border: '0.5px solid #e8e8e8', borderRadius: 6, fontSize: 14, cursor: 'pointer', color: '#6B7280' }}>
                       ✕
                     </button>
                   </div>
@@ -452,22 +495,24 @@ export default function MeetingPage() {
 
                 {/* Specs row */}
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 13, marginBottom: 10 }}>
-                  {selected.area      && <span><span style={{ color: '#888' }}>Περιοχη: </span>{selected.area}</span>}
-                  {selected.sqm       && <span><span style={{ color: '#888' }}>Τ.μ.: </span>{selected.sqm}</span>}
-                  {selected.floor     && <span><span style={{ color: '#888' }}>Οροφος: </span>{selected.floor}</span>}
-                  {selected.year_built && <span><span style={{ color: '#888' }}>Ετος: </span>{selected.year_built}</span>}
-                  {selected.rooms     && <span><span style={{ color: '#888' }}>Δωμ.: </span>{selected.rooms}</span>}
-                  {selected.condition && <span><span style={{ color: '#888' }}>Κατ/ση: </span>{COND_LABELS[selected.condition] || selected.condition}</span>}
+                  {selected.area      && <span><span style={{ color: '#6B7280' }}>Περιοχη: </span>{selected.area}</span>}
+                  {selected.sqm       && <span><span style={{ color: '#6B7280' }}>Τ.μ.: </span>{selected.sqm}</span>}
+                  {selected.floor     && <span><span style={{ color: '#6B7280' }}>Οροφος: </span>{selected.floor}</span>}
+                  {selected.year_built && <span><span style={{ color: '#6B7280' }}>Ετος: </span>{selected.year_built}</span>}
+                  {selected.rooms     && <span><span style={{ color: '#6B7280' }}>Δωμ.: </span>{selected.rooms}</span>}
+                  {selected.condition && <span><span style={{ color: '#6B7280' }}>Κατ/ση: </span>{COND_LABELS[selected.condition] || selected.condition}</span>}
                   {selected.asking_price && <span style={{ color: '#CC2229', fontWeight: 500 }}>Ζητα: {fmtE(selected.asking_price)}</span>}
                 </div>
 
                 {/* Action buttons */}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {/* Setting/re-running the valuation is what sets "the price" — admin/CEO only */}
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {/* Setting/re-running the valuation is what sets "the price" — admin/CEO only.
+                      Runs automatically on first open now (see the selected-effect above), so this
+                      is mainly a manual re-run after new comps/feedback come in. */}
                   {isAdmin && (
                     <button onClick={runEstimation} disabled={estimating}
                       style={{ padding: '8px 20px', background: '#CC2229', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer', opacity: estimating ? 0.7 : 1 }}>
-                      {estimating ? '🤖 Εκτιμηση...' : '🤖 AI Εκτιμηση'}
+                      {estimating ? '🤖 Εκτιμηση...' : valuation ? '🔄 Επανάληψη Εκτίμησης' : '🤖 AI Εκτιμηση'}
                     </button>
                   )}
 
@@ -482,11 +527,34 @@ export default function MeetingPage() {
                       {settingAppraisal ? '...' : selected.status === 'for_appraisal' ? '↩ Αναιρεση Εκτιμησης' : '📋 Προς Εκτιμηση'}
                     </button>
                   )}
+
+                  {/* Admin finalizes review and jumps straight to the next property in the queue */}
+                  {isAdmin && valuation && selected.status !== 'completed' && (
+                    <button onClick={completeAppraisal}
+                      style={{ padding: '8px 16px', background: '#EAF3DE', color: '#3B6D11', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>
+                      ✓ Ολοκλήρωση Εκτίμησης →
+                    </button>
+                  )}
                 </div>
+                {valuationError && (
+                  <div style={{ marginTop: 10, padding: '8px 12px', background: '#FCEBEB', color: '#A32D2D', borderRadius: 8, fontSize: 12 }}>
+                    ❌ {valuationError}
+                  </div>
+                )}
               </div>
 
               {/* Scrollable body */}
               <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.25rem' }}>
+
+                {/* ── Photos — shown here inline so reviewing a property never
+                    requires leaving Meeting Ακινήτων for the full property
+                    file/profile page ── */}
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: '#6B7280', marginBottom: 2, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                    Φωτογραφιες
+                  </div>
+                  <PropertyPhotoUpload propertyId={selected.id} />
+                </div>
 
                 {/* ── Top Producers (auto, per area) ── */}
                 {topProducers.length > 0 && (
@@ -512,22 +580,22 @@ export default function MeetingPage() {
                 {valuation && (
                   <div style={{ marginBottom: 20 }}>
                     <div style={{ background: '#1a1a1a', borderRadius: 12, padding: '1.25rem', color: '#fff', marginBottom: 12 }}>
-                      <div style={{ fontSize: 11, color: '#888', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.05em' }}>AI Εκτιμηση</div>
+                      <div style={{ fontSize: 11, color: '#B0B0B0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.05em' }}>AI Εκτιμηση</div>
                       <div style={{ fontSize: 28, fontWeight: 700, color: '#CC2229', marginBottom: 4 }}>
                         {fmtE(valuation.ai_recommended || valuation.recommended)}
                       </div>
-                      <div style={{ fontSize: 13, color: '#888' }}>
+                      <div style={{ fontSize: 13, color: '#B0B0B0' }}>
                         Ευρος: {fmtE(valuation.ai_min || valuation.min)} – {fmtE(valuation.ai_max || valuation.max)}
                       </div>
                       {(valuation.ai_price_per_sqm || valuation.price_per_sqm) && (
-                        <div style={{ fontSize: 13, color: '#888' }}>
+                        <div style={{ fontSize: 13, color: '#B0B0B0' }}>
                           {fmtE(valuation.ai_price_per_sqm || valuation.price_per_sqm)}/τμ
                         </div>
                       )}
                       <div style={{ marginTop: 8, background: 'rgba(255,255,255,.1)', borderRadius: 100, height: 6, overflow: 'hidden' }}>
                         <div style={{ height: '100%', background: '#CC2229', width: ((valuation.confidence_score || valuation.confidence || 0.5) * 100) + '%', transition: 'width 0.5s' }} />
                       </div>
-                      <div style={{ fontSize: 11, color: '#888', marginTop: 3 }}>
+                      <div style={{ fontSize: 11, color: '#B0B0B0', marginTop: 3 }}>
                         Εμπιστοσυνη: {Math.round((valuation.confidence_score || valuation.confidence || 0.5) * 100)}%
                       </div>
                     </div>
@@ -538,14 +606,14 @@ export default function MeetingPage() {
                     )}
                     {(valuation.comparables || []).length > 0 && (
                       <div style={{ marginTop: 4 }}>
-                        <div style={{ fontSize: 12, color: '#888', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                        <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.05em' }}>
                           Συγκρισιμα ({(valuation.comparables || []).length})
                         </div>
                         {(valuation.comparables || []).map((c: any, i: number) => (
                           <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '0.5px solid #f0f0f0', fontSize: 12 }}>
                             <span>{c.area} · {c.sqm}τμ · {c.year_built || '?'}</span>
                             <span style={{ fontWeight: 500 }}>
-                              €{fmt(c.price)} <span style={{ color: '#bbb', fontWeight: 400 }}>(€{fmt(c.ppsqm || c.price_per_sqm)}/τμ · {Math.round((c.w || c.weight) * 100)}%)</span>
+                              €{fmt(c.price)} <span style={{ color: '#6B7280', fontWeight: 400 }}>(€{fmt(c.ppsqm || c.price_per_sqm)}/τμ · {Math.round((c.w || c.weight) * 100)}%)</span>
                             </span>
                           </div>
                         ))}
@@ -554,25 +622,29 @@ export default function MeetingPage() {
                   </div>
                 )}
 
-                {/* ── Comments / Producer feedback ── */}
+                {/* ── Comments — everyone can vote/comment; only top-producer
+                    feedback actually moves the price (decided server-side in
+                    meeting-valuation/pricing-model, not here) ── */}
                 <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: '#888', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>
-                    Σχολια Producers ({comments.length})
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '.05em' }}>
+                      Σχόλια ({comments.length})
+                    </div>
+                    {agreePct != null && (
+                      <div style={{ fontSize: 12, color: agreePct >= 50 ? '#3B6D11' : '#CC2229', fontWeight: 600 }}>
+                        {agreePct}% συμφωνούν με την εκτίμηση
+                      </div>
+                    )}
                   </div>
 
-                  {/* Add comment form — only once a valuation exists, and only for
-                      area top producers / admin (server enforces the same rule) */}
-                  {!valuation ? (
-                    <div style={{ fontSize: 12, color: '#888', padding: '10px 12px', background: '#f8f8f7', borderRadius: 8, marginBottom: 14 }}>
+                  {/* Add comment form — only once a valuation exists to react to */}
+                  {!canComment ? (
+                    <div style={{ fontSize: 12, color: '#6B7280', padding: '10px 12px', background: '#f8f8f7', borderRadius: 8, marginBottom: 14 }}>
                       Τα σχόλια ανοίγουν μετά την πρώτη AI εκτίμηση.
-                    </div>
-                  ) : !canComment ? (
-                    <div style={{ fontSize: 12, color: '#888', padding: '10px 12px', background: '#f8f8f7', borderRadius: 8, marginBottom: 14 }}>
-                      Μόνο οι top producers της περιοχής {selected.area} (ή admin) σχολιάζουν εδώ.
                     </div>
                   ) : (
                   <div style={{ background: '#f8f8f7', border: '0.5px solid #e8e8e8', borderRadius: 10, padding: '12px', marginBottom: 14 }}>
-                    <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>Η γνωμη σου για την εκτιμηση:</div>
+                    <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 8 }}>Η γνωμη σου για την εκτιμηση:</div>
                     <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                       <button onClick={() => setAgrees(true)}
                         style={{ flex: 1, padding: '7px', borderRadius: 8, fontSize: 12, cursor: 'pointer', background: agrees === true ? '#3B6D11' : '#fff', color: agrees === true ? '#fff' : '#666', border: agrees === true ? 'none' : '0.5px solid #ddd', fontWeight: agrees === true ? 600 : 400 }}>
@@ -611,7 +683,7 @@ export default function MeetingPage() {
 
                   {/* Existing comments */}
                   {comments.length === 0 ? (
-                    <div style={{ color: '#bbb', fontSize: 13, textAlign: 'center', padding: '1rem 0' }}>
+                    <div style={{ color: '#6B7280', fontSize: 13, textAlign: 'center', padding: '1rem 0' }}>
                       Κανενα σχολιο ακομα
                     </div>
                   ) : comments.map(c => (
@@ -621,15 +693,20 @@ export default function MeetingPage() {
                       </div>
                       <div style={{ flex: 1 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                          <span style={{ fontSize: 13, fontWeight: 500 }}>{c.agent_name}</span>
+                          <span style={{ fontSize: 13, fontWeight: 500 }}>
+                            {c.agent_name}
+                            {topProducerIds.has(c.agent_id) && (
+                              <span title="Top producer — η εκτίμησή του/της μετράει στην εκπαίδευση του μοντέλου" style={{ marginLeft: 5, fontSize: 11 }}>⭐</span>
+                            )}
+                          </span>
                           {c.agent_estimate && (
                             <span style={{ fontSize: 12, color: '#CC2229', fontWeight: 500 }}>
-                              Εκτιμα: {fmtE(c.agent_estimate)}
+                              Εκτιμα: {fmtE(c.agent_estimate)}{!topProducerIds.has(c.agent_id) && <span style={{ color: '#6B7280', fontWeight: 400 }}> (ιστορικό)</span>}
                             </span>
                           )}
                         </div>
                         <p style={{ fontSize: 13, color: '#555', margin: 0, lineHeight: 1.5 }}>{c.comment}</p>
-                        <div style={{ fontSize: 11, color: '#bbb', marginTop: 4 }}>
+                        <div style={{ fontSize: 11, color: '#6B7280', marginTop: 4 }}>
                           {new Date(c.created_at).toLocaleDateString('el-GR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                         </div>
                       </div>
@@ -640,7 +717,7 @@ export default function MeetingPage() {
             </div>
           ) : (
             <div style={{ background: '#f8f8f7', border: '0.5px solid #e8e8e8', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 400 }}>
-              <div style={{ textAlign: 'center', color: '#bbb' }}>
+              <div style={{ textAlign: 'center', color: '#6B7280' }}>
                 <div style={{ fontSize: 40, marginBottom: 12 }}>🏠</div>
                 <div style={{ fontSize: 14 }}>Επιλεξε ακινητο για εκτιμηση</div>
               </div>

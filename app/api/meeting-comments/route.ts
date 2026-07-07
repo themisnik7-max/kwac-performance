@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { getAuthedAgent, isCeoOrAdmin } from '@/lib/auth'
+import { getAuthedAgent } from '@/lib/auth'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -8,10 +8,16 @@ const sb = createClient(
 )
 
 // POST { property_id, comment, agent_estimate?, agrees_with_ai }
-// Only the top producers for the property's area (or CEO/Admin) may comment,
-// and only once an AI valuation already exists — this was previously a bare
-// browser insert with no eligibility check at all (any authenticated agent
-// could comment on any property).
+// Open to any authenticated agent in the property's agency, once an AI
+// valuation already exists to react to. By explicit product decision, this
+// is a history/engagement log for everyone — whether a given comment's
+// agent_estimate actually moves the price is decided downstream, in
+// meeting-valuation and pricing-model/train, which only count feedback from
+// that area's top producers. Previously this route itself gated writes to
+// top-producers-or-admin, but top_producers_by_area matches sold comps to an
+// agent via properties.agent_email (null on every closed comp today), so it
+// was silently open to everyone in practice anyway — this makes that
+// intentional instead of accidental.
 export async function POST(req: NextRequest) {
   const caller = await getAuthedAgent(req)
   if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
@@ -26,20 +32,6 @@ export async function POST(req: NextRequest) {
 
   const { data: valuation } = await sb.from('meeting_valuations').select('property_id').eq('property_id', property_id).maybeSingle()
   if (!valuation) return NextResponse.json({ error: 'Δεν υπάρχει ακόμα εκτίμηση για αυτό το ακίνητο' }, { status: 409 })
-
-  if (!isCeoOrAdmin(caller)) {
-    const { data: topProducers } = await sb.rpc('top_producers_by_area', { p_area: prop.area })
-    // top_producers_by_area matches sold comps to an agent via properties.agent_email,
-    // which is null on every closed comp in the current data (a real data-completeness
-    // gap, not something to silently paper over) — so it always returns empty right now.
-    // Failing closed on empty data would lock out every agent, not just non-top-producers,
-    // which is worse than the rule it's meant to enforce. Open access until that data
-    // exists; once top producers are actually identifiable, this becomes a real gate.
-    if (topProducers?.length) {
-      const eligible = topProducers.some((tp: any) => tp.agent_id === caller.id)
-      if (!eligible) return NextResponse.json({ error: 'Μόνο οι top producers της περιοχής σχολιάζουν' }, { status: 403 })
-    }
-  }
 
   const { error } = await sb.from('meeting_comments').insert({
     property_id, agent_id: caller.id, agent_name: caller.full_name || caller.email,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
 interface Photo { id: string; url: string; original_name: string; size_bytes: number; created_at: string }
@@ -30,7 +30,26 @@ export function PropertyPhotoUpload({ propertyId, initialPhotos = [] }: Props) {
   const [statuses,   setStatuses]  = useState<{ name: string; state: 'uploading' | 'done' | 'error'; error?: string }[]>([])
   const [deleting,   setDeleting]  = useState<string | null>(null)
   const [lightbox,   setLightbox]  = useState<string | null>(null)
+  const [dragOver,   setDragOver]  = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Photos already uploaded in a previous visit never showed up here before —
+  // this component only ever refreshed its list right after a fresh upload,
+  // never on mount, so reopening a property looked like the photos had never
+  // saved even when they were sitting in storage the whole time.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+      const res = await fetch(`/api/property-photos?property_id=${propertyId}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+      const data = await res.json()
+      if (!cancelled) setPhotos(data.photos ?? [])
+    })()
+    return () => { cancelled = true }
+  }, [propertyId])
 
   const upload = useCallback(async (files: FileList | null) => {
     if (!files || !files.length) return
@@ -106,26 +125,33 @@ export function PropertyPhotoUpload({ propertyId, initialPhotos = [] }: Props) {
 
   return (
     <div style={{ marginTop: 12 }}>
-      {/* Upload button — large touch target for mobile */}
+      {/* Upload button — large touch target for mobile — doubles as a real
+          drop zone now (it had the dashed-border drop-zone styling before but
+          no onDrop/onDragOver handlers at all, so dragging a file onto it
+          silently did nothing; only the click-to-pick-a-file path worked). */}
       <label
+        onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={e => { e.preventDefault(); setDragOver(false); upload(e.dataTransfer.files) }}
         style={{
           display:        'flex',
           alignItems:     'center',
           justifyContent: 'center',
           gap:            8,
           padding:        '12px 0',
-          background:     '#1a1a1a',
-          border:         '1.5px dashed #2a2a2a',
+          background:     dragOver ? '#2a2a2a' : '#1a1a1a',
+          border:         dragOver ? '1.5px dashed #CC2229' : '1.5px dashed #2a2a2a',
           borderRadius:   8,
           cursor:         'pointer',
           fontSize:       13,
           color:          '#666',
           userSelect:     'none',
           WebkitUserSelect: 'none',
+          transition:     'background .15s, border-color .15s',
         }}
       >
         <span style={{ fontSize: 20 }}>📷</span>
-        <span>Προσθήκη φωτογραφιών</span>
+        <span>Προσθήκη φωτογραφιών (ή σύρε εδώ)</span>
         <input
           ref={fileRef}
           type="file"

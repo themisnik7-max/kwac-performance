@@ -22,27 +22,12 @@ export async function POST(req: NextRequest) {
     .from('meeting_properties').select('*').eq('id', property_id).eq('agency_id', caller.agency_id).single()
   if (!prop) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  // properties.price doesn't exist on the live schema (price_asking/
-  // price_final do) — this query previously errored on every call, silently
-  // returning zero comps for every valuation ever run. price_final (actual
-  // closed price) is preferred when the deal is done; price_asking covers
-  // still-active listings so the comp pool isn't limited to closed sales only.
-  const { data: rawPropsComps } = await sb
-    .from('properties')
-    .select('area, price_asking, price_final, sqm, year_built, floor, condition, property_type, created_at, agent_name')
-    .eq('deal_type', 'sale').eq('area', prop.area).eq('agency_id', caller.agency_id)
-    .not('sqm', 'is', null).gt('sqm', 0)
-    .gte('created_at', new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000).toISOString())
-    .order('created_at', { ascending: false }).limit(30)
-
-  const ownComps = (rawPropsComps || [])
-    .map(c => ({ ...c, price: c.price_final ?? c.price_asking }))
-    .filter(c => (c.price ?? 0) > 0)
-
-  // Supplement with real, official transaction data (Ministry of Finance
-  // "Μητρώο Αξιών Μεταβιβάσεων Ακινήτων") — the agency's own comps are
-  // mostly still-active asking prices, not proven sales, and there are only
-  // a handful of them per area. See lib/mamaRegistry.ts.
+  // Comp basis is the government registry ONLY (Ministry of Finance "Μητρώο
+  // Αξιών Μεταβιβάσεων Ακινήτων") — by explicit product decision, the
+  // agency's own `properties` rows (mostly still-active asking prices, not
+  // proven sales) no longer feed the price the model recommends. Only real
+  // closed transactions (this registry) and top-producer feedback (below)
+  // are allowed to move the number. See lib/mamaRegistry.ts.
   const { data: registryRows } = await sb
     .from('market_transactions')
     .select('sqm_main, year_built, floor, contract_date, price')
@@ -54,8 +39,7 @@ export async function POST(req: NextRequest) {
     condition: null, created_at: r.contract_date, price: r.price,
   }))
 
-  const rawComps = [...ownComps, ...registryComps]
-  const { comps, outlierCount, avgPpsqm, hasComps } = estimatePpsqm(rawComps)
+  const { comps, outlierCount, avgPpsqm, hasComps } = estimatePpsqm(registryComps)
 
   const floorMult = floorMultiplier(prop.floor)
   const condMult  = conditionMultiplier(prop.condition)
@@ -149,7 +133,11 @@ export async function POST(req: NextRequest) {
   let agentConsensus: number | null = null
   let blendCompWeight: number | null = null
   let blendFeedbackWeight: number | null = null
-  const validFeedback = (feedbackRows || []).filter(f => f.agent_estimate > 0)
+  // By explicit product decision, only top producers of this property's area
+  // move the price — anyone can comment/vote in Meeting Ακινήτων (see
+  // /api/meeting-comments), but non-top-producer feedback is history only,
+  // filtered out here rather than at write time.
+  const validFeedback = (feedbackRows || []).filter(f => f.agent_estimate > 0 && producerWeightMap[f.agent_id] != null)
 
   if (validFeedback.length >= 2) {
     const feedbackWithWeights = validFeedback.map(f => ({ estimate: f.agent_estimate, weight: producerWeightMap[f.agent_id] ?? (f.feedback_weight || 0.8) }))
@@ -200,11 +188,10 @@ export async function POST(req: NextRequest) {
     : `Πιθανότητα πώλησης: ${saleProbability.note}`
 
   const reasoning = comps.length > 0
-    ? [`Βάση: ${comps.length} συγκρίσιμες πωλήσεις στην περιοχή ${prop.area}`,
-       `(${ownComps.length} δικά μας, ${registryComps.length} από το Μητρώο Αξιών Μεταβιβάσεων Ακινήτων).`,
+    ? [`Βάση: ${comps.length} συγκρίσιμες πωλήσεις στην περιοχή ${prop.area} από το Μητρώο Αξιών Μεταβιβάσεων Ακινήτων.`,
        `(${outlierCount > 0 ? outlierCount + ' ακραίες τιμές αφαιρέθηκαν, ' : ''}μεσ. σταθμισμένο ${Math.round(avgPpsqm).toLocaleString('el-GR')} €/τ.μ.).`,
        adjustments.length > 0 ? `Εφαρμόστηκαν διορθώσεις ${adjustments.join(', ')}.` : '',
-       validFeedback.length >= 2 ? `Συνεκτιμήθηκαν εκτιμήσεις ${validFeedback.length} παραγωγών (40% βάρος).` : '',
+       validFeedback.length >= 2 ? `Συνεκτιμήθηκαν εκτιμήσεις ${validFeedback.length} top producers (40% βάρος).` : '',
        nnRecommended != null ? `Μοντέλο ΝΝ: €${nnRecommended.toLocaleString('el-GR')} (${Math.round(nnWeight * 100)}% βάρος στο τελικό).` : '',
        `Εμπιστοσύνη: ${Math.round(blendedConf * 100)}%.`,
        topCompSentence, probabilitySentence, featureContribText,
