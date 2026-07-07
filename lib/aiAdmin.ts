@@ -12,7 +12,16 @@ export const DAILY_ACTION_CAP = 50
 // quality on open-ended portfolio questions ever feels thin.
 const MODEL = 'claude-haiku-4-5-20251001'
 
-export type ToolName = 'add_contact' | 'create_open_house' | 'send_email'
+export type ToolName =
+  | 'add_contact' | 'create_open_house' | 'send_email'
+  | 'log_call' | 'set_gps_goal' | 'cancel_room_booking' | 'join_open_house' | 'leave_open_house'
+  | 'add_property_comment' | 'run_property_valuation'
+  | 'send_property_sms' | 'send_property_newsletter'
+
+// Tools whose executor calls an existing, already-gated route rather than
+// touching tables directly — keeps eligibility/consent/tracking logic in
+// exactly one place instead of re-implementing it here.
+export const CONFIRM_REQUIRED_TOOLS: ToolName[] = ['send_email', 'send_property_sms', 'send_property_newsletter']
 
 export const TOOLS = [
   {
@@ -55,6 +64,103 @@ export const TOOLS = [
       required: ['recipient_name', 'subject', 'body'],
     },
   },
+  {
+    name: 'log_call',
+    description: 'Log a call the agent just made to a phone number, counting toward their weekly call total. Call directly, executes immediately.',
+    input_schema: {
+      type: 'object',
+      properties: { phone: { type: 'string', description: 'Phone number called' } },
+      required: ['phone'],
+    },
+  },
+  {
+    name: 'set_gps_goal',
+    description: 'Set or update the calling agent\'s own annual income goal / GPS targets. Only ever affects the caller\'s own goal. Call directly, executes immediately. Only include fields the user actually gave a number for.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target_income: { type: 'number', description: 'Annual income target in EUR' },
+        avg_property_price: { type: 'number' },
+        commission_rate: { type: 'number', description: 'Percent, e.g. 3 for 3%' },
+        agent_split: { type: 'number', description: 'Percent of commission the agent keeps' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'cancel_room_booking',
+    description: 'Cancel a meeting room booking by its id. Call directly, executes immediately (only the booking owner or admin can actually cancel it — the system enforces that, not you).',
+    input_schema: {
+      type: 'object',
+      properties: { booking_id: { type: 'string' } },
+      required: ['booking_id'],
+    },
+  },
+  {
+    name: 'join_open_house',
+    description: 'Sign the calling agent up as a volunteer for an open house by its id. Call directly, executes immediately.',
+    input_schema: {
+      type: 'object',
+      properties: { open_house_id: { type: 'string' } },
+      required: ['open_house_id'],
+    },
+  },
+  {
+    name: 'leave_open_house',
+    description: 'Withdraw the calling agent from an open house they volunteered for. Call directly, executes immediately.',
+    input_schema: {
+      type: 'object',
+      properties: { open_house_id: { type: 'string' } },
+      required: ['open_house_id'],
+    },
+  },
+  {
+    name: 'add_property_comment',
+    description: 'Post the agent\'s feedback/estimate on a property\'s AI valuation, for Meeting Ακινήτων. Call directly — the system will reject it if the agent isn\'t eligible (only the property area\'s top producers or admin can comment, and only once a valuation exists), just relay that message back if so.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        property_id: { type: 'string' },
+        comment: { type: 'string' },
+        agrees_with_ai: { type: 'boolean' },
+        agent_estimate: { type: 'number', description: 'Optional — the agent\'s own price estimate in EUR' },
+      },
+      required: ['property_id', 'comment', 'agrees_with_ai'],
+    },
+  },
+  {
+    name: 'run_property_valuation',
+    description: 'Trigger a fresh AI comp-based valuation for a property in Meeting Ακινήτων. Admin/CEO only — the system enforces that, just relay the error back if the caller isn\'t eligible. Call directly, no preview needed (the valuation itself is the output).',
+    input_schema: {
+      type: 'object',
+      properties: { property_id: { type: 'string' } },
+      required: ['property_id'],
+    },
+  },
+  {
+    name: 'send_property_sms',
+    description: 'Send an SMS about a property to every SMS-consented contact. NEVER sends immediately — always preview first, send only after explicit confirmation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        property_id: { type: 'string' },
+        message: { type: 'string', description: 'Optional custom message; a sensible default is used if omitted' },
+      },
+      required: ['property_id'],
+    },
+  },
+  {
+    name: 'send_property_newsletter',
+    description: 'Send an email newsletter for one or more properties to every email-consented contact. NEVER sends immediately — always preview first, send only after explicit confirmation.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        property_ids: { type: 'array', items: { type: 'string' } },
+        subject: { type: 'string', description: 'Optional custom subject' },
+      },
+      required: ['property_ids'],
+    },
+  },
 ]
 
 export function buildSystemPrompt(portfolioContext: string): string {
@@ -69,8 +175,8 @@ ${portfolioContext}
 
 Κανόνες:
 - Απαντάς ΜΟΝΟ βάσει των δεδομένων που βλέπεις εδώ πάνω, ποτέ επινοημένους αριθμούς.
-- Για add_contact και create_open_house: κάλεσε το εργαλείο απευθείας μόλις έχεις αρκετές πληροφορίες — εκτελούνται αμέσως.
-- Για send_email: ΠΟΤΕ μην επινοήσεις περιεχόμενο. Αν ο χρήστης δεν είπε τι να γράφει το email, ρώτα τον πρώτα σε απλό κείμενο.
+- Άμεση εκτέλεση, χωρίς επιβεβαίωση: add_contact, create_open_house, log_call, set_gps_goal, cancel_room_booking, join_open_house, leave_open_house, add_property_comment, run_property_valuation. Αν το σύστημα απορρίψει μια ενέργεια (π.χ. δεν είσαι top producer ή admin), απλά μετέφερε το μήνυμα σφάλματος στον χρήστη — μην προσπαθήσεις να το παρακάμψεις.
+- Πάντα preview πρώτα, ποτέ άμεση αποστολή: send_email, send_property_sms, send_property_newsletter. ΠΟΤΕ μην επινοήσεις περιεχόμενο — αν ο χρήστης δεν είπε τι να γράφει, ρώτα τον πρώτα σε απλό κείμενο.
 - Στα ελληνικά, σύντομα και συγκεκριμένα.`
 }
 
@@ -95,6 +201,7 @@ export async function callClaude(system: string, message: string): Promise<{ tex
     }),
   })
   const data = await res.json()
+  if (!res.ok) throw new Error(`Anthropic API ${res.status}: ${data?.error?.message || JSON.stringify(data)}`)
   const blocks = (data.content ?? []) as ClaudeContentBlock[]
   const textBlock = blocks.find((b): b is { type: 'text'; text: string } => b.type === 'text')
   const toolBlock = blocks.find((b): b is { type: 'tool_use'; id: string; name: ToolName; input: Record<string, any> } => b.type === 'tool_use')
@@ -157,6 +264,90 @@ export async function executeCreateOpenHouse(sb: SupabaseClient, agencyId: strin
   })
   if (error) return { ok: false, summary: `Σφάλμα: ${error.message}` }
   return { ok: true, summary: `✅ Δημιούργησα open house στις ${args.date} (${args.start_time || '11:00'}–${args.end_time || '13:00'}) στη διεύθυνση ${args.address}.` }
+}
+
+export async function executeLogCall(sb: SupabaseClient, agentId: string, agencyId: string, args: { phone: string }) {
+  const now = new Date()
+  await sb.from('call_events').insert({ agent_id: agentId, agency_id: agencyId, phone: args.phone, called_at: now.toISOString() })
+  const weekStart = new Date(now)
+  weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7))
+  weekStart.setHours(0, 0, 0, 0)
+  await sb.rpc('increment_weekly_call_count', { p_agent_id: agentId, p_agency_id: agencyId, p_week_start: weekStart.toISOString().split('T')[0] })
+  return { ok: true, summary: `✅ Καταχωρήθηκε κλήση προς ${args.phone}.` }
+}
+
+export async function executeSetGpsGoal(sb: SupabaseClient, agentId: string, agencyId: string, args: Record<string, number | undefined>) {
+  const rest = Object.fromEntries(Object.entries(args).filter(([, v]) => v != null))
+  if (Object.keys(rest).length === 0) return { ok: false, summary: 'Δεν έδωσες καμία τιμή στόχου.' }
+  const { error } = await sb.from('gps_goals').upsert(
+    { agent_id: agentId, agency_id: agencyId, ...rest, updated_at: new Date().toISOString() },
+    { onConflict: 'agent_id' },
+  )
+  if (error) return { ok: false, summary: `Σφάλμα: ${error.message}` }
+  return { ok: true, summary: `✅ Ενημερώθηκε ο στόχος GPS.` }
+}
+
+export async function executeCancelRoomBooking(sb: SupabaseClient, agentId: string, agencyId: string, isAdmin: boolean, args: { booking_id: string }) {
+  const { data: booking } = await sb.from('room_bookings').select('agent_id, agency_id').eq('id', args.booking_id).single()
+  if (!booking || booking.agency_id !== agencyId) return { ok: false, summary: 'Δεν βρέθηκε η κράτηση.' }
+  if (booking.agent_id !== agentId && !isAdmin) return { ok: false, summary: 'Δεν μπορείς να ακυρώσεις κράτηση άλλου μεσίτη.' }
+  const { error } = await sb.from('room_bookings').delete().eq('id', args.booking_id)
+  if (error) return { ok: false, summary: `Σφάλμα: ${error.message}` }
+  return { ok: true, summary: '✅ Η κράτηση ακυρώθηκε.' }
+}
+
+export async function executeOpenHouseVolunteer(sb: SupabaseClient, agentId: string, agencyId: string, action: 'join' | 'leave', args: { open_house_id: string }) {
+  const { data: openHouse } = await sb.from('open_houses').select('agency_id').eq('id', args.open_house_id).single()
+  if (!openHouse || openHouse.agency_id !== agencyId) return { ok: false, summary: 'Δεν βρέθηκε το open house.' }
+
+  if (action === 'leave') {
+    const { error } = await sb.from('open_house_volunteers').delete().eq('open_house_id', args.open_house_id).eq('agent_id', agentId)
+    if (error) return { ok: false, summary: `Σφάλμα: ${error.message}` }
+    return { ok: true, summary: '✅ Αποσύρθηκες από το open house.' }
+  }
+
+  const { data: existing } = await sb.from('open_house_volunteers').select('id, agent_id').eq('open_house_id', args.open_house_id)
+  if ((existing || []).length >= 2) return { ok: false, summary: 'Οι 2 θέσεις εθελοντών έχουν συμπληρωθεί.' }
+  if ((existing || []).some(v => v.agent_id === agentId)) return { ok: false, summary: 'Έχεις ήδη δηλώσει συμμετοχή.' }
+  const { error } = await sb.from('open_house_volunteers').insert({ open_house_id: args.open_house_id, agent_id: agentId, agency_id: agencyId })
+  if (error) return { ok: false, summary: `Σφάλμα: ${error.message}` }
+  return { ok: true, summary: '✅ Δήλωσες συμμετοχή στο open house.' }
+}
+
+// The remaining tools call an already-gated route instead of touching tables
+// directly — eligibility (top-producer/admin), consent filtering, and
+// tracked-link/campaign logic all already live in exactly one place there.
+async function callInternalRoute(origin: string, token: string, path: string, body: Record<string, any>) {
+  const res = await fetch(`${origin}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json().catch(() => ({}))
+  return { ok: res.ok, status: res.status, data }
+}
+
+export async function executeAddPropertyComment(origin: string, token: string, args: { property_id: string; comment: string; agrees_with_ai: boolean; agent_estimate?: number }) {
+  const { ok, data } = await callInternalRoute(origin, token, '/api/meeting-comments', args)
+  return { ok, summary: ok ? '✅ Το σχόλιο καταχωρήθηκε.' : (data.error || 'Σφάλμα.') }
+}
+
+export async function executeRunPropertyValuation(origin: string, token: string, args: { property_id: string }) {
+  const { ok, data } = await callInternalRoute(origin, token, '/api/meeting-valuation', args)
+  if (!ok) return { ok: false, summary: data.error || 'Σφάλμα.' }
+  const v = data.valuation
+  return { ok: true, summary: `✅ Νέα εκτίμηση: €${Number(v.recommended ?? 0).toLocaleString('el-GR')} (εμπιστοσύνη ${Math.round((v.confidence || 0) * 100)}%).` }
+}
+
+// SMS/newsletter route straight to the caller's own agent_id (canActAs trivially
+// passes for self) — preview (confirm:false) and confirm (confirm:true) both go
+// through this, matching the routes' own two-call design.
+export async function previewOrSendPropertySms(origin: string, token: string, agentId: string, args: { property_id: string; message?: string }, confirm: boolean) {
+  return callInternalRoute(origin, token, '/api/marketing/sms', { ...args, agent_id: agentId, confirm })
+}
+
+export async function previewOrSendPropertyNewsletter(origin: string, token: string, agentId: string, args: { property_ids: string[]; subject?: string }, confirm: boolean) {
+  return callInternalRoute(origin, token, '/api/marketing/newsletter', { ...args, agent_id: agentId, confirm })
 }
 
 export async function executeSendEmail(sb: SupabaseClient, contact: { id: string; email: string; full_name: string }, agentEmail: string, agentName: string, args: { subject: string; body: string }) {
