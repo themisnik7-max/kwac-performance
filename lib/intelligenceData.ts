@@ -14,15 +14,24 @@ export type Insight = { type: 'warning' | 'opportunity' | 'insight'; icon: strin
 export async function getIntelligenceData(agency_id: string) {
   const { data: rows } = await supabase
     .from('properties')
-    .select('agent_name,area,price,price_per_sqm,property_type,transaction_type')
+    .select('agent_name,area,price_asking,price_final,price_sqm_final,sqm,property_type,deal_type')
     .eq('agency_id', agency_id)
 
-  const props = rows || []
-  const sales = props.filter(p => p.transaction_type === 'sale')
-  const rentals = props.filter(p => p.transaction_type === 'rental')
-  const portfolioValue = sales.reduce((s, p) => s + (p.price || 0), 0)
-  const avgSale = sales.length ? Math.round(sales.reduce((s, p) => s + (p.price || 0), 0) / sales.length) : 0
-  const avgRental = rentals.length ? Math.round(rentals.reduce((s, p) => s + (p.price || 0), 0) / rentals.length) : 0
+  // price_final (actual closed price) when the deal is done, else price_asking
+  // for still-active listings — properties.price/.price_per_sqm/.transaction_type
+  // don't exist on the live schema (real columns above); this function was
+  // silently returning all-zero data on every call until this fix, since a
+  // select referencing a nonexistent column fails the whole query.
+  const props = (rows || []).map(p => ({
+    ...p,
+    price: p.price_final ?? p.price_asking ?? 0,
+    pricePerSqm: p.price_sqm_final ?? (p.sqm && p.price_asking ? Math.round(p.price_asking / p.sqm) : null),
+  }))
+  const sales = props.filter(p => p.deal_type === 'sale')
+  const rentals = props.filter(p => p.deal_type === 'rental')
+  const portfolioValue = sales.reduce((s, p) => s + p.price, 0)
+  const avgSale = sales.length ? Math.round(sales.reduce((s, p) => s + p.price, 0) / sales.length) : 0
+  const avgRental = rentals.length ? Math.round(rentals.reduce((s, p) => s + p.price, 0) / rentals.length) : 0
   const totalCount = props.length || 1
 
   const byAgent: Record<string, { name: string; total: number; sales: number; rentals: number; portfolio: number }> = {}
@@ -30,7 +39,7 @@ export async function getIntelligenceData(agency_id: string) {
     const name = p.agent_name || 'Άγνωστος'
     if (!byAgent[name]) byAgent[name] = { name, total: 0, sales: 0, rentals: 0, portfolio: 0 }
     byAgent[name].total++
-    if (p.transaction_type === 'sale') { byAgent[name].sales++; byAgent[name].portfolio += p.price || 0 }
+    if (p.deal_type === 'sale') { byAgent[name].sales++; byAgent[name].portfolio += p.price }
     else byAgent[name].rentals++
   })
   const agents = Object.values(byAgent)
@@ -42,7 +51,7 @@ export async function getIntelligenceData(agency_id: string) {
     const area = p.area || 'Άγνωστη'
     if (!byArea[area]) byArea[area] = { area, count: 0, sumPsqm: 0, n: 0 }
     byArea[area].count++
-    if (p.price_per_sqm) { byArea[area].sumPsqm += p.price_per_sqm; byArea[area].n++ }
+    if (p.pricePerSqm) { byArea[area].sumPsqm += p.pricePerSqm; byArea[area].n++ }
   })
   const areas = Object.values(byArea).sort((a, b) => b.count - a.count).slice(0, 8).map(a => ({ area: a.area, count: a.count }))
   const psqm = Object.values(byArea).filter(a => a.n > 0)

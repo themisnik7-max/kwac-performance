@@ -53,7 +53,7 @@ const EMPTY: Record<string, any> = {
   owner_name:'', owner_phone:'', owner_email:'',
 }
 
-type HistoryEntry = { kind: 'voice_note' | 'comment' | 'valuation'; date: string; text: string; meta?: string }
+type HistoryEntry = { kind: 'voice_note' | 'comment' | 'valuation' | 'contact'; date: string; text: string; meta?: string }
 
 export default function PropertyFilePage({params}: {params: {id: string}}){
   const id = params?.id
@@ -63,7 +63,8 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
   const [loading,setLoading]=useState(true)
   const [user,setUser]=useState<any>(null)
   const [prop,setProp]=useState<Record<string, any>>({...EMPTY})
-  const [ownerContact,setOwnerContact]=useState<{id:string; name:string}|null>(null)
+  const [ownerContact,setOwnerContact]=useState<{id:string; name:string; phone:string|null; email:string|null}|null>(null)
+  const [ownerHistory,setOwnerHistory]=useState<HistoryEntry[]>([])
   const [history,setHistory]=useState<HistoryEntry[]>([])
   const [showMarketing,setShowMarketing]=useState(false)
 
@@ -83,8 +84,23 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
       setProp(row)
 
       if (row.owner_contact_id) {
-        const { data: c } = await supabase.from('contacts').select('id,full_name,first_name,last_name').eq('id', row.owner_contact_id).single()
-        if (c) setOwnerContact({ id: c.id, name: contactName(c) })
+        const { data: c } = await supabase.from('contacts').select('id,full_name,first_name,last_name,phone,email').eq('id', row.owner_contact_id).single()
+        if (c) {
+          setOwnerContact({ id: c.id, name: contactName(c), phone: c.phone, email: c.email })
+          const ownerEntries: HistoryEntry[] = []
+          const { data: recipients } = await supabase.from('marketing_campaign_recipients')
+            .select('sent_at,clicked_at,marketing_campaigns(channel,subject)').eq('contact_id', c.id)
+          for (const r of (recipients || []) as any[]) {
+            if (!r.sent_at) continue
+            const camp = r.marketing_campaigns
+            ownerEntries.push({ kind: 'contact', date: r.sent_at, text: camp?.subject || (camp?.channel === 'sms' ? 'SMS καμπάνια' : 'Email καμπάνια'), meta: r.clicked_at ? 'Άνοιξε/έκανε κλικ' : 'Στάλθηκε' })
+          }
+          const { data: aiActions } = await supabase.from('ai_admin_actions_log')
+            .select('created_at,result_summary,tool_name').eq('tool_args->>contact_id', c.id)
+          for (const a of aiActions || []) ownerEntries.push({ kind: 'contact', date: a.created_at, text: a.result_summary || a.tool_name, meta: '🤖 AI Admin' })
+          ownerEntries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+          setOwnerHistory(ownerEntries)
+        }
       }
 
       const entries: HistoryEntry[] = []
@@ -183,8 +199,27 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
 
               <Sec>Ιδιοκτήτης</Sec>
               {ownerContact && (
-                <div style={{marginBottom:10,padding:'10px 12px',background:C.subtle,borderRadius:8,fontSize:13}}>
-                  Συνδεδεμένος με καρτέλα επαφής: <a href={`/contacts/${ownerContact.id}`} style={{color:C.blue,fontWeight:600,textDecoration:'none'}}>{ownerContact.name} →</a>
+                <div style={{marginBottom:10,padding:'12px 14px',background:C.subtle,borderRadius:8,fontSize:13}}>
+                  <div style={{marginBottom:6}}>
+                    Καρτέλα επαφής: <a href={`/contacts/${ownerContact.id}`} style={{color:C.blue,fontWeight:600,textDecoration:'none'}}>{ownerContact.name} →</a>
+                  </div>
+                  <div style={{color:C.muted,fontSize:12,lineHeight:1.8}}>
+                    {ownerContact.phone && <div>📞 {ownerContact.phone}</div>}
+                    {ownerContact.email && <div>✉️ {ownerContact.email}</div>}
+                  </div>
+                  <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid '+C.border}}>
+                    <div style={{fontSize:10,fontWeight:700,color:C.muted,textTransform:'uppercase',marginBottom:6}}>Ιστορικό επικοινωνίας ({ownerHistory.length})</div>
+                    {ownerHistory.length===0 && <div style={{fontSize:12,color:C.muted}}>Καμία επικοινωνία καταγεγραμμένη ακόμα.</div>}
+                    {ownerHistory.slice(0,5).map((h,i)=>(
+                      <div key={i} style={{fontSize:12,marginBottom:6,paddingBottom:6,borderBottom:i<Math.min(ownerHistory.length,5)-1?'1px solid '+C.border:'none'}}>
+                        <div style={{display:'flex',justifyContent:'space-between'}}>
+                          <strong>{h.text}</strong>
+                          <span style={{color:C.muted}}>{new Date(h.date).toLocaleDateString('el-GR')}</span>
+                        </div>
+                        {h.meta && <div style={{color:C.muted}}>{h.meta}</div>}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               <div style={{background:C.subtle,borderRadius:12,padding:'14px 16px',marginBottom:14}}>
@@ -205,7 +240,7 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
                 <div key={i} style={{background:C.white,border:'1px solid '+C.border,borderRadius:10,padding:'10px 14px',marginBottom:8}}>
                   <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
                     <span style={{fontSize:10,fontWeight:700,color:C.muted,textTransform:'uppercase'}}>
-                      {h.kind==='voice_note'?'🎙 Φωνητική σημείωση':h.kind==='comment'?'💬 Σχόλιο':'🤖 AI Εκτίμηση'}
+                      {h.kind==='voice_note'?'🎙 Φωνητική σημείωση':h.kind==='comment'?'💬 Σχόλιο':h.kind==='contact'?'📧 Επικοινωνία':'🤖 AI Εκτίμηση'}
                     </span>
                     <span style={{fontSize:10,color:C.muted}}>{new Date(h.date).toLocaleDateString('el-GR')}</span>
                   </div>

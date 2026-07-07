@@ -31,7 +31,8 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 export default function MeetingPage() {
-  const { agent } = useApp()
+  const { agent, role } = useApp()
+  const isAdmin = role === 'ceo'
   const [props, setProps]           = useState<any[]>([])
   const [selected, setSelected]     = useState<any>(null)
   const [valuation, setValuation]   = useState<any>(null)
@@ -155,18 +156,19 @@ export default function MeetingPage() {
   async function submitComment() {
     if (!selected || !myComment.trim() || agrees === null) return
     setSavingComment(true)
-    const { error } = await sb.from('meeting_comments').insert({
-      property_id: selected.id,
-      agent_id: agent?.id || null,
-      agent_name: agent?.full_name || 'Αγνωστος',
-      comment: myComment,
-      agent_estimate: myEstimate ? parseFloat(myEstimate) : null,
-      agrees_with_ai: agrees,
-      feedback_processed: false,
-      feedback_weight: 1.0
+    const res = await authedFetch('/api/meeting-comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        property_id: selected.id,
+        comment: myComment,
+        agent_estimate: myEstimate ? parseFloat(myEstimate) : null,
+        agrees_with_ai: agrees,
+      }),
     })
+    const data = await res.json()
     setSavingComment(false)
-    if (error) { showToast('❌ ' + error.message); return }
+    if (!res.ok) { showToast('❌ ' + (data.error || 'Σφαλμα')); return }
     setMyComment(''); setMyEstimate(''); setAgrees(null)
     showToast('✅ Σχολιο αποθηκευτηκε!')
     fetchComments(selected.id)
@@ -243,6 +245,11 @@ export default function MeetingPage() {
 
   // ─── Derived state ────────────────────────────────────────────────────────
   const isSelectedOwner = selected?.agent_id === agent?.id
+  // Comments require a valuation to react to, and are restricted to the
+  // area's top producers (or admin) — see app/api/meeting-comments/route.ts
+  // for the server-side enforcement this mirrors, including the fallback for
+  // when top-producer data isn't available yet.
+  const canComment = !!valuation && (isAdmin || topProducers.length === 0 || topProducers.some((tp: any) => tp.agent_id === agent?.id))
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
@@ -456,10 +463,13 @@ export default function MeetingPage() {
 
                 {/* Action buttons */}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <button onClick={runEstimation} disabled={estimating}
-                    style={{ padding: '8px 20px', background: '#CC2229', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer', opacity: estimating ? 0.7 : 1 }}>
-                    {estimating ? '🤖 Εκτιμηση...' : '🤖 AI Εκτιμηση'}
-                  </button>
+                  {/* Setting/re-running the valuation is what sets "the price" — admin/CEO only */}
+                  {isAdmin && (
+                    <button onClick={runEstimation} disabled={estimating}
+                      style={{ padding: '8px 20px', background: '#CC2229', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer', opacity: estimating ? 0.7 : 1 }}>
+                      {estimating ? '🤖 Εκτιμηση...' : '🤖 AI Εκτιμηση'}
+                    </button>
+                  )}
 
                   {/* "Προς Εκτίμηση" toggle in detail header — OWNER ONLY */}
                   {isSelectedOwner && (selected.status === 'pending' || selected.status === 'for_appraisal') && (
@@ -550,7 +560,17 @@ export default function MeetingPage() {
                     Σχολια Producers ({comments.length})
                   </div>
 
-                  {/* Add comment form */}
+                  {/* Add comment form — only once a valuation exists, and only for
+                      area top producers / admin (server enforces the same rule) */}
+                  {!valuation ? (
+                    <div style={{ fontSize: 12, color: '#888', padding: '10px 12px', background: '#f8f8f7', borderRadius: 8, marginBottom: 14 }}>
+                      Τα σχόλια ανοίγουν μετά την πρώτη AI εκτίμηση.
+                    </div>
+                  ) : !canComment ? (
+                    <div style={{ fontSize: 12, color: '#888', padding: '10px 12px', background: '#f8f8f7', borderRadius: 8, marginBottom: 14 }}>
+                      Μόνο οι top producers της περιοχής {selected.area} (ή admin) σχολιάζουν εδώ.
+                    </div>
+                  ) : (
                   <div style={{ background: '#f8f8f7', border: '0.5px solid #e8e8e8', borderRadius: 10, padding: '12px', marginBottom: 14 }}>
                     <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>Η γνωμη σου για την εκτιμηση:</div>
                     <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
@@ -587,6 +607,7 @@ export default function MeetingPage() {
                       )}
                     </div>
                   </div>
+                  )}
 
                   {/* Existing comments */}
                   {comments.length === 0 ? (

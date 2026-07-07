@@ -11,7 +11,7 @@ const sb = createClient(
 const LOOKBACK_MS = 3 * 365 * 24 * 60 * 60 * 1000 // matches the live route's comp window
 const MIN_COMPS = 3
 
-type PropRow = CompRow & { area: string; property_type?: string | null }
+type PropRow = CompRow & { area: string; property_type?: string | null; actualPrice: number }
 
 // GET — holdout backtest for the comp-based pricing model: for every sold
 // property in the agency's history, predict its price using only comps that
@@ -24,16 +24,25 @@ export async function GET(req: NextRequest) {
   if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
   if (!isCeoOrAdmin(caller)) return NextResponse.json({ error: 'Admin/CEO only' }, { status: 403 })
 
+  // properties.price doesn't exist on the live schema — price_asking/
+  // price_final do. This query previously errored on every call, so the
+  // backtest always reported "not enough data" regardless of what was
+  // actually on record.
   const { data: sold } = await sb
     .from('properties')
-    .select('area, price, sqm, year_built, floor, condition, property_type, created_at')
+    .select('area, price_asking, price_final, sqm, year_built, floor, condition, property_type, created_at')
     .eq('agency_id', caller.agency_id)
     .eq('deal_type', 'sale')
     .eq('status', 'sold')
-    .not('price', 'is', null).not('sqm', 'is', null).gt('sqm', 0).gt('price', 0)
+    .not('price_final', 'is', null).not('sqm', 'is', null).gt('sqm', 0).gt('price_final', 0)
     .order('created_at', { ascending: true })
 
-  const targets = (sold || []) as PropRow[]
+  // For the comp pool (what the model would have seen), fall back to
+  // price_asking on rows without a final price; for the target itself,
+  // actualPrice is always price_final (guaranteed non-null by the filter above).
+  const targets = (sold || []).map(p => ({
+    ...p, price: p.price_final ?? p.price_asking, actualPrice: p.price_final as number,
+  })) as PropRow[]
   if (targets.length < 5) {
     return NextResponse.json({ ok: false, message: `Only ${targets.length} sold properties on record — need at least 5 to backtest.` })
   }
@@ -59,9 +68,9 @@ export async function GET(req: NextRequest) {
       * conditionMultiplier(target.condition)
       * ageMultiplier(target.year_built, asOf)
 
-    const pctError = (predicted - target.price) / target.price
+    const pctError = (predicted - target.actualPrice) / target.actualPrice
     errors.push(pctError)
-    details.push({ area: target.area, predicted: Math.round(predicted), actual: target.price, pct_error: Math.round(pctError * 1000) / 10, sold_at: target.created_at })
+    details.push({ area: target.area, predicted: Math.round(predicted), actual: target.actualPrice, pct_error: Math.round(pctError * 1000) / 10, sold_at: target.created_at })
   }
 
   if (errors.length === 0) {

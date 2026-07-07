@@ -79,3 +79,60 @@ export function estimatePpsqm(rawComps: CompRow[], asOf: number = Date.now()) {
 
   return { comps, outlierCount, avgPpsqm, hasComps: comps.length > 0 }
 }
+
+export type ClosedComp = {
+  address: string | null; area: string; sqm: number
+  price_asking: number; price_final: number; days_on_market: number | null
+  condition?: string | null; listed_at: string
+}
+
+export type SaleProbabilityEstimate = {
+  probability: number | null   // 0-1, null when there isn't enough real data to trust a number
+  sample_size: number
+  threshold_days: number
+  top_comp: ClosedComp | null
+  note: string
+}
+
+// Below this many closed comps, an empirical price-vs-probability split is
+// just noise dressed up as a percentage — report the gap honestly (see
+// meeting-valuation route) instead of a confident-looking fake number.
+const MIN_SAMPLE_FOR_PROBABILITY = 8
+
+// Empirical "did it sell within N days" rate among historical closed sales
+// priced at or below the target's €/sqm — a plain frequency table, not a
+// fitted model, so it's directly explainable (CLAUDE.md: no black box).
+// asking-price ratio is the signal, not final price, because the question
+// this answers is forward-looking: "if we list at price X, how likely is a
+// sale within N months" — final price is only known after the fact.
+export function estimateSaleProbability(
+  targetPpsqm: number,
+  closedComps: ClosedComp[],
+  thresholdDays = 183,
+): SaleProbabilityEstimate {
+  const valid = closedComps.filter(c => c.sqm > 0 && c.price_asking > 0 && c.days_on_market != null)
+  const topComp = valid.length
+    ? [...valid].sort((a, b) => new Date(b.listed_at).getTime() - new Date(a.listed_at).getTime())[0]
+    : null
+
+  if (valid.length === 0) {
+    return { probability: null, sample_size: 0, threshold_days: thresholdDays, top_comp: null, note: 'Δεν υπάρχουν ιστορικές κλεισμένες πωλήσεις για σύγκριση.' }
+  }
+  if (valid.length < MIN_SAMPLE_FOR_PROBABILITY) {
+    return {
+      probability: null, sample_size: valid.length, threshold_days: thresholdDays, top_comp: topComp,
+      note: `Ανεπαρκή δεδομένα για αξιόπιστη πιθανότητα πώλησης (χρειάζονται τουλάχιστον ${MIN_SAMPLE_FOR_PROBABILITY} κλεισμένες πωλήσεις, υπάρχουν ${valid.length}).`,
+    }
+  }
+
+  const withRatio = valid.map(c => ({ ...c, askPpsqm: c.price_asking / c.sqm, soldWithin: (c.days_on_market as number) <= thresholdDays }))
+  const atOrBelow = withRatio.filter(c => c.askPpsqm <= targetPpsqm)
+  const pool = atOrBelow.length >= 3 ? atOrBelow : withRatio
+  const probability = pool.filter(c => c.soldWithin).length / pool.length
+
+  return {
+    probability: Math.round(probability * 100) / 100,
+    sample_size: pool.length, threshold_days: thresholdDays, top_comp: topComp,
+    note: `Βάσει ${pool.length} ιστορικών πωλήσεων με τιμολόγηση ίση ή χαμηλότερη ανά τ.μ.`,
+  }
+}
