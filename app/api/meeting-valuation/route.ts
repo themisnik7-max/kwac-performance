@@ -33,10 +33,26 @@ export async function POST(req: NextRequest) {
     .gte('created_at', new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000).toISOString())
     .order('created_at', { ascending: false }).limit(30)
 
-  const rawComps = (rawPropsComps || [])
+  const ownComps = (rawPropsComps || [])
     .map(c => ({ ...c, price: c.price_final ?? c.price_asking }))
     .filter(c => (c.price ?? 0) > 0)
 
+  // Supplement with real, official transaction data (Ministry of Finance
+  // "Μητρώο Αξιών Μεταβιβάσεων Ακινήτων") — the agency's own comps are
+  // mostly still-active asking prices, not proven sales, and there are only
+  // a handful of them per area. See lib/mamaRegistry.ts.
+  const { data: registryRows } = await sb
+    .from('market_transactions')
+    .select('sqm_main, year_built, floor, contract_date, price')
+    .eq('area', prop.area)
+    .order('contract_date', { ascending: false }).limit(30)
+
+  const registryComps = (registryRows || []).map(r => ({
+    sqm: r.sqm_main, year_built: r.year_built, floor: r.floor,
+    condition: null, created_at: r.contract_date, price: r.price,
+  }))
+
+  const rawComps = [...ownComps, ...registryComps]
   const { comps, outlierCount, avgPpsqm, hasComps } = estimatePpsqm(rawComps)
 
   const floorMult = floorMultiplier(prop.floor)
@@ -125,6 +141,7 @@ export async function POST(req: NextRequest) {
 
   const reasoning = comps.length > 0
     ? [`Βάση: ${comps.length} συγκρίσιμες πωλήσεις στην περιοχή ${prop.area}`,
+       `(${ownComps.length} δικά μας, ${registryComps.length} από το Μητρώο Αξιών Μεταβιβάσεων Ακινήτων).`,
        `(${outlierCount > 0 ? outlierCount + ' ακραίες τιμές αφαιρέθηκαν, ' : ''}μεσ. σταθμισμένο ${Math.round(avgPpsqm).toLocaleString('el-GR')} €/τ.μ.).`,
        adjustments.length > 0 ? `Εφαρμόστηκαν διορθώσεις ${adjustments.join(', ')}.` : '',
        validFeedback.length >= 2 ? `Συνεκτιμήθηκαν εκτιμήσεις ${validFeedback.length} παραγωγών (40% βάρος).` : '',
@@ -133,7 +150,7 @@ export async function POST(req: NextRequest) {
       ].filter(Boolean).join(' ')
     : `Ανεπαρκή συγκρίσιμα στοιχεία για ${prop.area}. Η εκτίμηση είναι ενδεικτική. ${topCompSentence} ${probabilitySentence}`.trim()
 
-  await sb.from('meeting_valuations').upsert({
+  const { error: valuationErr } = await sb.from('meeting_valuations').upsert({
     property_id, agency_id: caller.agency_id,
     ai_min: min, ai_max: max, ai_recommended: recommended, ai_price_per_sqm: ppsqm,
     ai_reasoning: reasoning, comparables: comps.slice(0, 5), top_producers: topProducers?.slice(0, 3) || [],
@@ -142,6 +159,10 @@ export async function POST(req: NextRequest) {
     sale_probability: saleProbability.probability, sale_probability_sample_size: saleProbability.sample_size,
     updated_at: new Date().toISOString(),
   }, { onConflict: 'property_id' })
+  if (valuationErr) {
+    console.error('[meeting-valuation] meeting_valuations upsert failed', valuationErr)
+    return NextResponse.json({ error: `Αποτυχία αποθήκευσης εκτίμησης: ${valuationErr.message}` }, { status: 500 })
+  }
 
   // Append-only audit trail — every blend gets a row, so weight/output history
   // is visible even though the upsert above overwrites the live valuation.
