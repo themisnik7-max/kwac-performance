@@ -12,8 +12,13 @@ export async function POST(req: NextRequest) {
   if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
   const { open_house_id, agent_id } = await req.json()
-  if (!canActAs(caller, agent_id)) {
+  if (!(await canActAs(caller, agent_id))) {
     return NextResponse.json({ error: 'Δεν μπορείς να δηλώσεις συμμετοχή για άλλον μεσίτη' }, { status: 403 })
+  }
+
+  const { data: openHouse } = await supabase.from('open_houses').select('agency_id').eq('id', open_house_id).single()
+  if (!openHouse || openHouse.agency_id !== caller.agency_id) {
+    return NextResponse.json({ error: 'Open house not found' }, { status: 404 })
   }
 
   // Check current volunteer count
@@ -45,12 +50,12 @@ export async function DELETE(req: NextRequest) {
   const { open_house_id, agent_id } = await req.json()
   // Previously anyone could remove anyone else's signup just by knowing the
   // ids — now only the volunteer themselves or CEO/Admin can withdraw it.
-  if (!canActAs(caller, agent_id)) {
+  if (!(await canActAs(caller, agent_id))) {
     return NextResponse.json({ error: 'Δεν μπορείς να αποσύρεις τη συμμετοχή άλλου μεσίτη' }, { status: 403 })
   }
 
   const { error } = await supabase.from('open_house_volunteers')
-    .delete().eq('open_house_id', open_house_id).eq('agent_id', agent_id)
+    .delete().eq('open_house_id', open_house_id).eq('agent_id', agent_id).eq('agency_id', caller.agency_id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

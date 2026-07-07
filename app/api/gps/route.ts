@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
   const agent_id = req.nextUrl.searchParams.get('agent_id')
-  if (!agent_id || !canActAs(caller, agent_id)) {
+  if (!agent_id || !(await canActAs(caller, agent_id))) {
     return NextResponse.json({ error: 'Δεν μπορείς να δεις τους στόχους άλλου μεσίτη' }, { status: 403 })
   }
 
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { agent_id, ...rest } = body
 
-  if (!canActAs(caller, agent_id)) {
+  if (!(await canActAs(caller, agent_id))) {
     return NextResponse.json({ error: 'Δεν μπορείς να ορίσεις στόχους για άλλον μεσίτη' }, { status: 403 })
   }
 

@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Shell from '@/components/Shell'
 import { useApp } from '@/lib/AppContext'
 import { createClient } from '@/lib/supabase'
+import { authedFetch } from '@/lib/authedFetch'
 
 const STAGES = [
   { key: 'listing',   label: 'Ανάθεση',     icon: '📋', color: '#185FA5', bg: '#E6F1FB' },
@@ -67,7 +68,7 @@ export default function PipelinePage() {
   async function syncFromWordPress() {
     setSyncing(true)
     setSyncResult(null)
-    const res = await fetch('/api/pipeline-sync?manual=1')
+    const res = await authedFetch('/api/pipeline-sync?manual=1')
     const data = await res.json()
     setSyncResult(data)
     setSyncing(false)

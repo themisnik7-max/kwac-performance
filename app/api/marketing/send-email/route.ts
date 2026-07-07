@@ -163,7 +163,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { prop, agent_id } = body as { prop: Record<string, unknown>; agent_id: string }
 
-  if (!canActAs(caller, agent_id)) {
+  if (!(await canActAs(caller, agent_id))) {
     return NextResponse.json({ error: 'Δεν μπορείς να στείλεις marketing για άλλον μεσίτη' }, { status: 403 })
   }
 

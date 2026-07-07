@@ -19,7 +19,7 @@ export async function POST(req) {
   const body = await req.json()
   const { agent_id, week_number, year, data } = body
 
-  if (!canActAs(caller, agent_id)) {
+  if (!(await canActAs(caller, agent_id))) {
     return NextResponse.json({ error: 'Δεν μπορείς να υποβάλεις δεδομένα για άλλον μεσίτη' }, { status: 403 })
   }
 
@@ -61,7 +61,7 @@ export async function GET(req) {
   const week = searchParams.get('week')
   const year = searchParams.get('year')
 
-  if (!canActAs(caller, agent_id)) {
+  if (!(await canActAs(caller, agent_id))) {
     return NextResponse.json({ error: 'Δεν μπορείς να δεις δεδομένα άλλου μεσίτη' }, { status: 403 })
   }
 

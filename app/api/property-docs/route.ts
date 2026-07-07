@@ -97,6 +97,7 @@ export async function GET(req: NextRequest) {
     .from('property_documents')
     .select('id, category, original_name, size_bytes, notes, created_at, url, storage_path')
     .eq('property_id', propertyId)
+    .eq('agency_id', caller.agency_id)
     .order('category')
     .order('created_at')
 

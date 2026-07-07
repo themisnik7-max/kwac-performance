@@ -11,6 +11,7 @@ export type AuthedAgent = {
   email: string
   role: string
   agency_id: string
+  full_name: string | null
 }
 
 // Returns the calling agent, or null if there's no valid session. Reads the
@@ -25,7 +26,7 @@ export async function getAuthedAgent(req: NextRequest): Promise<AuthedAgent | nu
   const { data: userData, error } = await sb.auth.getUser(token)
   if (error || !userData?.user?.email) return null
 
-  const { data: agent } = await sb.from('agents').select('id,email,role,agency_id').eq('email', userData.user.email).single()
+  const { data: agent } = await sb.from('agents').select('id,email,role,agency_id,full_name').eq('email', userData.user.email).single()
   if (!agent) return null
 
   return agent as AuthedAgent
@@ -35,7 +36,14 @@ export function isCeoOrAdmin(agent: AuthedAgent) {
   return agent.role === 'ceo' || agent.role === 'admin'
 }
 
-// Convenience: throws-free check for "can this agent act as agent_id?"
-export function canActAs(agent: AuthedAgent, agent_id: string) {
-  return agent.id === agent_id || isCeoOrAdmin(agent)
+// "Can this agent act as agent_id?" Self always passes. CEO/Admin may act as
+// any agent, but ONLY within their own agency — a service-role client has no
+// RLS backstop, so this check is the only thing stopping a CEO in Agency A
+// from reading/overwriting an agent's data in Agency B. Must be awaited.
+export async function canActAs(agent: AuthedAgent, agent_id: string): Promise<boolean> {
+  if (!agent_id) return false
+  if (agent.id === agent_id) return true
+  if (!isCeoOrAdmin(agent)) return false
+  const { data: target } = await sb.from('agents').select('agency_id').eq('id', agent_id).single()
+  return target?.agency_id === agent.agency_id
 }

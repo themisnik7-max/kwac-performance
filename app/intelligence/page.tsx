@@ -137,9 +137,9 @@ function CeoIntelligence() {
     e.preventDefault()
     if (!chatQ.trim()) return
     setChatLoading(true); setChatA('')
-    const res = await authedFetch('/api/intelligence-chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: chatQ, context: data }) })
+    const res = await authedFetch('/api/intelligence-chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: chatQ }) })
     const d = await res.json()
-    setChatA(d.answer || d.error || 'Δεν ήρθε απάντηση.')
+    setChatA(d.reply || d.error || 'Δεν ήρθε απάντηση.')
     setChatLoading(false)
   }
 

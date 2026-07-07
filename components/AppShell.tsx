@@ -4,6 +4,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import Sidebar from './Sidebar'
 import PageTracker from './PageTracker'
+import AiAdminChat from './AiAdminChat'
 
 const PUBLIC_ROUTES = ['/login']
 
@@ -31,6 +32,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <>
       {!isPublic && <Sidebar />}
       {!isPublic && <PageTracker />}
+      {!isPublic && <AiAdminChat />}
       <main style={{ flex: 1, marginLeft: isPublic ? 0 : 220, minHeight: '100vh', background: '#0d0d0d' }}>
         {children}
       </main>

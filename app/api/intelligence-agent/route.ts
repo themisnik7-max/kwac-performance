@@ -24,47 +24,32 @@ export async function GET(req: NextRequest) {
   const dayOfYear   = Math.floor((now.getTime() - startOfYear.getTime()) / 86400000)
   const thisWeek    = Math.ceil((dayOfYear + startOfYear.getDay() + 1) / 7)
 
-  // ── 1. GPS Goal ──────────────────────────────────────────────────────────
-  const { data: gps } = await sb
-    .from('gps_goals')
-    .select('*')
-    .eq('agent_id', agentId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  // ── 2. Last 8 weekly submissions ─────────────────────────────────────────
-  const { data: submissions } = await sb
-    .from('weekly_submissions')
-    .select('*')
-    .eq('agent_id', agentId)
-    .order('year', { ascending: false })
-    .order('week_number', { ascending: false })
-    .limit(8)
-
-  // ── 3. Sprint entries (last 6 sprints) ───────────────────────────────────
-  const { data: sprintEntries } = await sb
-    .from('sprint_entries')
-    .select('*, sprint_sessions(label, date)')
-    .eq('agent_id', agentId)
-    .order('updated_at', { ascending: false })
-    .limit(6)
-
-  // ── 4. This agent's closed deals this month ──────────────────────────────
+  // These 5 queries are independent of each other — fire them together
+  // instead of awaiting one at a time.
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
-  const { count: dealsThisMonth } = await sb
-    .from('properties')
-    .select('*', { count: 'exact', head: true })
-    .eq('agent_id', agentId)
-    .eq('status', 'sold')
-    .gte('sold_at', monthStart)
-
-  // ── 5. Active listings count ─────────────────────────────────────────────
-  const { count: activeListings } = await sb
-    .from('properties')
-    .select('*', { count: 'exact', head: true })
-    .eq('agent_id', agentId)
-    .neq('status', 'sold')
+  const [
+    { data: gps },
+    { data: submissions },
+    { data: sprintEntries },
+    { count: dealsThisMonth },
+    { count: activeListings },
+  ] = await Promise.all([
+    // 1. GPS Goal
+    sb.from('gps_goals').select('*').eq('agent_id', agentId)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    // 2. Last 8 weekly submissions
+    sb.from('weekly_submissions').select('*').eq('agent_id', agentId)
+      .order('year', { ascending: false }).order('week_number', { ascending: false }).limit(8),
+    // 3. Sprint entries (last 6 sprints)
+    sb.from('sprint_entries').select('*, sprint_sessions(label, date)').eq('agent_id', agentId)
+      .order('updated_at', { ascending: false }).limit(6),
+    // 4. This agent's closed deals this month
+    sb.from('properties').select('*', { count: 'exact', head: true })
+      .eq('agent_id', agentId).eq('status', 'sold').gte('sold_at', monthStart),
+    // 5. Active listings count
+    sb.from('properties').select('*', { count: 'exact', head: true })
+      .eq('agent_id', agentId).neq('status', 'sold'),
+  ])
 
   // ── Compute weekly averages from submissions ──────────────────────────────
   const subs = submissions || []

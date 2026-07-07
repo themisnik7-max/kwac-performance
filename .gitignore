@@ -31,3 +31,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
+.env*
+
+# supabase CLI local metadata — machine-specific, not project source
+supabase/.temp/

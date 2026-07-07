@@ -211,7 +211,10 @@ export async function POST(req: NextRequest) {
     if (demandId) {
       const matchReq = new Request('http://internal/api/demand-match', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(process.env.INTERNAL_API_SECRET ? { 'x-internal-secret': process.env.INTERNAL_API_SECRET } : {}),
+        },
         body: JSON.stringify({ demand_id: demandId }),
       })
       import('@/app/api/demand-match/route').then(m => m.POST(matchReq as never))

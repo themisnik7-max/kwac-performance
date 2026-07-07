@@ -1,6 +1,5 @@
 "use client";
 import{useState,useCallback}from"react";
-import*as XLSX from"xlsx";
 import{supabase}from"@/lib/supabase";
 import{useApp}from"@/lib/AppContext";
 const RED="#CC2229";
@@ -19,7 +18,7 @@ const ups=useCallback(async(batch)=>{
   const{error}=await supabase.from("properties").upsert(stamped,{onConflict:"ilist_id"});
   if(error)throw error;
 },[agent]);
-const load=useCallback((f)=>{if(!f)return;setFile(f);setStep("loading");const rd=new FileReader();rd.onload=(e)=>{try{const wb=XLSX.read(e.target.result,{type:"array"});const data=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});const p=data.slice(1).map(pRow).filter(Boolean);setRows(p);setStats({total:p.length,meeting:p.filter(r=>r.add_to_meeting).length,sale:p.filter(r=>r.transaction_type==="sale").length,rental:p.filter(r=>r.transaction_type==="rental").length});setStep("preview");}catch(e){setErr(e.message);setStep("error");}};rd.readAsArrayBuffer(f);},[]);
+const load=useCallback((f)=>{if(!f)return;setFile(f);setStep("loading");const rd=new FileReader();rd.onload=async(e)=>{try{const XLSX=await import("xlsx");const wb=XLSX.read(e.target.result,{type:"array"});const data=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});const p=data.slice(1).map(pRow).filter(Boolean);setRows(p);setStats({total:p.length,meeting:p.filter(r=>r.add_to_meeting).length,sale:p.filter(r=>r.transaction_type==="sale").length,rental:p.filter(r=>r.transaction_type==="rental").length});setStep("preview");}catch(e){setErr(e.message);setStep("error");}};rd.readAsArrayBuffer(f);},[]);
 const doImp=async()=>{
   if(!agent){setErr("Χρειάζεται σύνδεση για να γίνει εισαγωγή");setStep("error");return;}
   setStep("importing");setPct(0);try{for(let i=0;i<rows.length;i+=50){await ups(rows.slice(i,i+50));setPct(Math.round(((i+Math.min(50,rows.length-i))/rows.length)*100));}setStep("done");}catch(e){setErr(e.message);setStep("error");}};

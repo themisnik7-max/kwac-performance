@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient }              from '@supabase/supabase-js'
+import { getAuthedAgent }            from '@/lib/auth'
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
+
+// Reachable two ways: (1) voice-ingest calls this in-process right after saving
+// a demand profile, tagging the trusted internal secret since that request has
+// no end-user bearer token; (2) an agent manually re-triggers matching from the
+// UI with their own session token — that path must prove they own the demand.
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET
 
 // Called internally after a demand_profile is saved.
 // Finds active listed properties that match, sends email to client,
@@ -242,6 +249,10 @@ export async function POST(req: NextRequest) {
   const { demand_id } = await req.json()
   if (!demand_id) return NextResponse.json({ error: 'demand_id required' }, { status: 400 })
 
+  const isInternalCall = !!INTERNAL_API_SECRET && req.headers.get('x-internal-secret') === INTERNAL_API_SECRET
+  const caller = isInternalCall ? null : await getAuthedAgent(req)
+  if (!isInternalCall && !caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
   // 1. Load demand
   const { data: demand } = await db
     .from('demand_profiles')
@@ -249,6 +260,8 @@ export async function POST(req: NextRequest) {
     .eq('id', demand_id)
     .single()
   if (!demand) return NextResponse.json({ error: 'Demand not found' }, { status: 404 })
+  if (caller && demand.agency_id !== caller.agency_id)
+    return NextResponse.json({ error: 'Demand not found' }, { status: 404 })
 
   const d = demand as DemandProfile
   if (!d.client_email) return NextResponse.json({ ok: true, matched: 0, reason: 'No client email' })

@@ -1,64 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthedAgent } from '@/lib/auth'
+import { estimatePpsqm, floorMultiplier, conditionMultiplier, ageMultiplier, confidenceScore } from '@/lib/valuation'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
-
-const LAMBDA = Math.LN2 / 6
-function timeWeight(dateStr: string): number {
-  const months = (Date.now() - new Date(dateStr).getTime()) / (1000 * 60 * 60 * 24 * 30)
-  return Math.exp(-LAMBDA * months)
-}
-
-function filterOutliers<T extends { ppsqm: number }>(items: T[]): T[] {
-  if (items.length < 4) return items
-  const sorted = [...items].sort((a, b) => a.ppsqm - b.ppsqm)
-  const q1 = sorted[Math.floor(sorted.length * 0.25)].ppsqm
-  const q3 = sorted[Math.floor(sorted.length * 0.75)].ppsqm
-  const iqr = q3 - q1
-  return items.filter(c => c.ppsqm >= q1 - 1.5 * iqr && c.ppsqm <= q3 + 1.5 * iqr)
-}
-
-function floorMultiplier(floor: string | null | undefined): number {
-  if (!floor) return 1.0
-  const f = parseInt(floor)
-  if (isNaN(f)) return 1.0
-  if (f === 0) return 0.95
-  return Math.min(1.0 + (f - 1) * 0.02, 1.12)
-}
-
-function conditionMultiplier(condition: string | null | undefined): number {
-  switch (condition) {
-    case 'excellent':  return 1.07
-    case 'good':       return 1.00
-    case 'fair':       return 0.94
-    case 'needs_work': return 0.87
-    default:           return 1.00
-  }
-}
-
-function ageMultiplier(yearBuilt: number | null | undefined): number {
-  if (!yearBuilt) return 1.0
-  const age = new Date().getFullYear() - yearBuilt
-  if (age <= 5)  return 1.05
-  if (age <= 15) return 1.00
-  if (age <= 30) return 0.95
-  if (age <= 45) return 0.91
-  return 0.87
-}
-
-function confidenceScore(comps: { ppsqm: number; w: number }[], mean: number): number {
-  if (comps.length === 0) return 0.25
-  const variance = comps.reduce((s, c) => s + Math.pow(c.ppsqm - mean, 2) * c.w, 0) /
-                   comps.reduce((s, c) => s + c.w, 0)
-  const cv = Math.sqrt(variance) / mean
-  const sizeScore = comps.length >= 8 ? 1.0 : comps.length >= 5 ? 0.85 : comps.length >= 3 ? 0.70 : 0.55
-  const varScore  = cv < 0.10 ? 1.0 : cv < 0.20 ? 0.85 : cv < 0.35 ? 0.65 : 0.45
-  return Math.round(sizeScore * varScore * 100) / 100
-}
 
 export async function POST(req: NextRequest) {
   const caller = await getAuthedAgent(req)
@@ -77,26 +25,22 @@ export async function POST(req: NextRequest) {
     .gte('created_at', new Date(Date.now() - 3 * 365 * 24 * 60 * 60 * 1000).toISOString())
     .order('created_at', { ascending: false }).limit(30)
 
-  const enriched = (rawComps || []).map(c => ({ ...c, w: timeWeight(c.created_at), ppsqm: Math.round(c.price / c.sqm) }))
-    .filter(c => c.ppsqm > 500 && c.ppsqm < 50000)
-
-  const comps = filterOutliers(enriched)
-  const outlierCount = enriched.length - comps.length
-
-  const totalW = comps.reduce((s, c) => s + c.w, 0)
-  const avgPpsqm = totalW > 0 ? comps.reduce((s, c) => s + c.ppsqm * c.w, 0) / totalW : 0
+  const { comps, outlierCount, avgPpsqm, hasComps } = estimatePpsqm(rawComps || [])
 
   const floorMult = floorMultiplier(prop.floor)
   const condMult  = conditionMultiplier(prop.condition)
   const ageMult   = ageMultiplier(prop.year_built)
 
-  let recommended = avgPpsqm * (prop.sqm || 0) * floorMult * condMult * ageMult
+  // No comps means no comp-based estimate — null, not 0, so it can never be
+  // silently blended in as "the comps say ~€0" (see blending below) and never
+  // gets averaged into future analytics as a real zero-priced valuation.
+  let recommended: number | null = hasComps ? avgPpsqm * (prop.sqm || 0) * floorMult * condMult * ageMult : null
   const conf = confidenceScore(comps, avgPpsqm)
 
-  const min   = Math.round(recommended * 0.90 / 1000) * 1000
-  const max   = Math.round(recommended * 1.10 / 1000) * 1000
-  recommended = Math.round(recommended / 1000) * 1000
-  const ppsqm = prop.sqm ? Math.round(recommended / prop.sqm) : 0
+  const min   = recommended != null ? Math.round(recommended * 0.90 / 1000) * 1000 : null
+  const max   = recommended != null ? Math.round(recommended * 1.10 / 1000) * 1000 : null
+  recommended = recommended != null ? Math.round(recommended / 1000) * 1000 : null
+  const ppsqm = recommended != null && prop.sqm ? Math.round(recommended / prop.sqm) : null
 
   const { data: feedbackRows } = await sb
     .from('meeting_comments').select('agent_id, agent_estimate, agrees_with_ai, feedback_weight')
@@ -111,13 +55,24 @@ export async function POST(req: NextRequest) {
 
   let blended = recommended
   let blendedConf = conf
+  let agentConsensus: number | null = null
+  let blendCompWeight: number | null = null
+  let blendFeedbackWeight: number | null = null
   const validFeedback = (feedbackRows || []).filter(f => f.agent_estimate > 0)
 
   if (validFeedback.length >= 2) {
     const feedbackWithWeights = validFeedback.map(f => ({ estimate: f.agent_estimate, weight: producerWeightMap[f.agent_id] ?? (f.feedback_weight || 0.8) }))
     const totalFW = feedbackWithWeights.reduce((s, f) => s + f.weight, 0)
-    const agentConsensus = feedbackWithWeights.reduce((s, f) => s + f.estimate * f.weight, 0) / totalFW
-    blended = Math.round((recommended * 0.60 + agentConsensus * 0.40) / 1000) * 1000
+    agentConsensus = feedbackWithWeights.reduce((s, f) => s + f.estimate * f.weight, 0) / totalFW
+    // No comp basis (recommended === null) => go with agent consensus alone,
+    // don't blend it against a comp estimate that doesn't exist.
+    if (recommended != null) {
+      blendCompWeight = 0.60
+      blendFeedbackWeight = 0.40
+      blended = Math.round((recommended * blendCompWeight + agentConsensus * blendFeedbackWeight) / 1000) * 1000
+    } else {
+      blended = Math.round(agentConsensus / 1000) * 1000
+    }
     blendedConf = Math.min(conf + 0.05 * Math.min(validFeedback.length, 3), 0.95)
   }
 
@@ -143,6 +98,18 @@ export async function POST(req: NextRequest) {
     feedback_count: validFeedback.length, last_feedback_sync: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }, { onConflict: 'property_id' })
+
+  // Append-only audit trail — every blend gets a row, so weight/output history
+  // is visible even though the upsert above overwrites the live valuation.
+  const { error: logErr } = await sb.from('valuation_calibration_log').insert({
+    agency_id: caller.agency_id, property_id,
+    comp_recommended: recommended, comp_confidence: conf, comp_count: comps.length,
+    agent_consensus: agentConsensus, feedback_count: validFeedback.length,
+    blend_comp_weight: blendCompWeight, blend_feedback_weight: blendFeedbackWeight,
+    producer_weight_map: producerWeightMap,
+    blended_recommended: blended, blended_confidence: blendedConf,
+  })
+  if (logErr) console.error('[meeting-valuation] calibration log insert failed (non-fatal)', logErr)
 
   if (validFeedback.length > 0) {
     await sb.from('meeting_comments').update({ feedback_processed: true })
