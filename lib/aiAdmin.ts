@@ -3,6 +3,7 @@
 // per-agent usage cap, and the audit log every turn writes to regardless of
 // outcome — see PRODUCT_SPEC.md / CLAUDE.md on admin oversight.
 import { SupabaseClient } from '@supabase/supabase-js'
+import { contactName, splitName } from '@/lib/contacts'
 
 export const DAILY_ACTION_CAP = 50
 // Haiku, not Sonnet — this route is mostly short structured extraction (which
@@ -125,18 +126,25 @@ export async function logAction(sb: SupabaseClient, row: {
   })
 }
 
+// contacts has two overlapping name schemes in the live data (full_name from
+// AI Admin/marketing, first_name+last_name from the original Google Contacts
+// import) — search and write both, see lib/contacts.ts.
 export async function findContactsByName(sb: SupabaseClient, agencyId: string, name: string) {
-  const { data } = await sb.from('contacts').select('id, full_name, email')
-    .eq('agency_id', agencyId).ilike('full_name', `%${name}%`).limit(5)
-  return data || []
+  const { data } = await sb.from('contacts').select('id, full_name, first_name, last_name, email')
+    .eq('agency_id', agencyId)
+    .or(`full_name.ilike.%${name}%,first_name.ilike.%${name}%,last_name.ilike.%${name}%`)
+    .limit(5)
+  return (data || []).map(c => ({ ...c, full_name: contactName(c) }))
 }
 
 export async function executeAddContact(sb: SupabaseClient, agencyId: string, args: { full_name: string; phone?: string; email?: string }) {
   if (!args.phone && !args.email) return { ok: false, summary: 'Χρειάζομαι τηλέφωνο ή email για να προσθέσω τον πελάτη.' }
   // email_consent/sms_consent default to false (DB default) — adding a
   // contact is never itself consent to be marketed to.
+  const { first_name, last_name } = splitName(args.full_name)
   const { error } = await sb.from('contacts').insert({
-    agency_id: agencyId, full_name: args.full_name, phone: args.phone ?? null, email: args.email ?? null,
+    agency_id: agencyId, full_name: args.full_name, first_name, last_name,
+    phone: args.phone ?? null, email: args.email ?? null, type: 'contact',
   })
   if (error) return { ok: false, summary: `Σφάλμα: ${error.message}` }
   return { ok: true, summary: `✅ Πρόσθεσα τον πελάτη ${args.full_name}${args.phone ? ` (${args.phone})` : ''}.` }
