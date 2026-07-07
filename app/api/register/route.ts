@@ -9,8 +9,18 @@ const sb = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY! // admin key needed to create auth users
 )
 
+function initialsFrom(fullName: string): string {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean)
+  const initials = parts.slice(0, 2).map(p => p[0]?.toUpperCase() ?? '').join('')
+  return initials || '??'
+}
+
 export async function POST(req: NextRequest) {
-  const { email, password, full_name, phone } = await req.json()
+  const body = await req.json()
+  const email = (body.email ?? '').trim()
+  const password = body.password
+  const full_name = (body.full_name ?? '').trim()
+  const phone = body.phone
 
   if (!email || !password || !full_name) {
     return NextResponse.json({ error: 'Συμπλήρωσε email, κωδικό και ονοματεπώνυμο.' }, { status: 400 })
@@ -59,6 +69,7 @@ export async function POST(req: NextRequest) {
     id:         authData.user.id, // match auth.users.id
     email:      email.toLowerCase(),
     full_name,
+    initials:   initialsFrom(full_name),
     phone:      phone || null,
     role:       'agent',
     agency_id:  agency.id,

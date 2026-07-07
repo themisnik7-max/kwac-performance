@@ -84,8 +84,8 @@ export default function LoginPage() {
           <form onSubmit={handleLogin}>
             <div style={{ marginBottom: 16 }}>
               <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 6 }}>Email</label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
-                style={inputStyle} placeholder="name@kwac.gr" />
+              <input type="email" value={email} onChange={e => setEmail(e.target.value.trim())} required
+                style={inputStyle} placeholder="name@kwgreece.gr" />
             </div>
             <div style={{ marginBottom: 24 }}>
               <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 6 }}>Κωδικός</label>
@@ -111,10 +111,10 @@ export default function LoginPage() {
             <div style={{ marginBottom: 12 }}>
               <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 6 }}>
                 Εταιρικό Email *
-                <span style={{ color: '#888', fontWeight: 400, fontSize: 11, marginLeft: 6 }}>μόνο @kwac.gr</span>
+                <span style={{ color: '#888', fontWeight: 400, fontSize: 11, marginLeft: 6 }}>μόνο @kwgreece.gr</span>
               </label>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} required
-                style={inputStyle} placeholder="name@kwac.gr" />
+              <input type="email" value={email} onChange={e => setEmail(e.target.value.trim())} required
+                style={inputStyle} placeholder="name@kwgreece.gr" />
             </div>
             <div style={{ marginBottom: 12 }}>
               <label style={{ fontSize: 12, fontWeight: 500, display: 'block', marginBottom: 6 }}>Τηλέφωνο</label>
