@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthedAgent, isCeoOrAdmin } from '@/lib/auth'
 import { estimatePpsqm, floorMultiplier, conditionMultiplier, ageMultiplier, confidenceScore, estimateSaleProbability } from '@/lib/valuation'
+import { MiniNet } from '@/lib/miniNet'
+import { buildFeatureVector, FEATURE_NAMES, FEATURE_LABELS_EL } from '@/lib/pricingFeatures'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -90,6 +92,53 @@ export async function POST(req: NextRequest) {
 
   const { data: topProducers } = await sb.rpc('top_producers_by_area', { p_area: prop.area })
 
+  // Small neural-net pricing model (lib/miniNet.ts) — a second, independent
+  // estimate from a network trained on location/sqm/floor/age/condition/
+  // balcony/utilization/competing-inventory features (see lib/pricingFeatures.ts),
+  // reinforced over time by folding meeting_comments feedback into each
+  // retrain (app/api/pricing-model/train). Purely additive: if no model has
+  // been trained yet for this agency, nnRecommended stays null and the blend
+  // below behaves exactly as before.
+  const { data: modelRun } = await sb
+    .from('pricing_model_runs').select('*')
+    .eq('agency_id', caller.agency_id).eq('is_active', true)
+    .order('trained_at', { ascending: false }).limit(1).maybeSingle()
+
+  let nnRecommended: number | null = null
+  let nnWeight = 0
+  let featureContribText = ''
+  if (modelRun && prop.sqm) {
+    const { count: competingCount } = await sb
+      .from('properties').select('id', { count: 'exact', head: true })
+      .eq('agency_id', caller.agency_id).eq('area', prop.area).eq('deal_type', 'sale')
+      .neq('status', 'sold').gte('sqm', prop.sqm * 0.8).lte('sqm', prop.sqm * 1.2)
+
+    const net = MiniNet.fromJSON(modelRun.model_json)
+    const x = buildFeatureVector({
+      area: prop.area, sqm: prop.sqm, floor: prop.floor, year_built: prop.year_built,
+      year_renovated: prop.year_renovated, condition: prop.condition, balcony: prop.balcony,
+      utilization_score: prop.utilization_score, lat: prop.lat, lng: prop.lng,
+      competing_listings_count: competingCount ?? null,
+    })
+    const nnPpsqm = Math.exp(net.predict(x))
+    nnRecommended = Math.round(nnPpsqm * prop.sqm)
+    // Weight scales with the model's own logged holdout R² — an unproven or
+    // poorly-fit model barely moves the blend; a model that's demonstrated
+    // real accuracy earns more say, capped so it never dominates a comp-based
+    // estimate grounded in actual same-area sales.
+    nnWeight = Math.max(0, Math.min(0.30, 0.05 + Math.max(0, modelRun.holdout_r2 ?? 0) * 0.35))
+
+    const contributions = net.featureContributions(x)
+    const namedContribs = FEATURE_NAMES
+      .map((name, i) => ({ label: FEATURE_LABELS_EL[name], pctEffect: (Math.exp(contributions[i]) - 1) * 100 }))
+      .filter(c => c.label)
+      .sort((a, b) => Math.abs(b.pctEffect) - Math.abs(a.pctEffect))
+      .slice(0, 3)
+    if (namedContribs.length) {
+      featureContribText = `Μοντέλο ΝΝ (εμπιστοσύνη βάσει ιστορικού ${modelRun.holdout_mae_pct != null ? `${modelRun.holdout_mae_pct}% μέσο σφάλμα` : 'μη επικυρωμένο'}): κυριότεροι παράγοντες ${namedContribs.map(c => `${c.label} (${c.pctEffect >= 0 ? '+' : ''}${c.pctEffect.toFixed(1)}%)`).join(', ')}.`
+    }
+  }
+
   const producerWeightMap: Record<string, number> = {}
   topProducers?.forEach((tp: any, i: number) => {
     if (tp.agent_id) producerWeightMap[tp.agent_id] = i === 0 ? 1.5 : i === 1 ? 1.25 : 1.0
@@ -106,16 +155,27 @@ export async function POST(req: NextRequest) {
     const feedbackWithWeights = validFeedback.map(f => ({ estimate: f.agent_estimate, weight: producerWeightMap[f.agent_id] ?? (f.feedback_weight || 0.8) }))
     const totalFW = feedbackWithWeights.reduce((s, f) => s + f.weight, 0)
     agentConsensus = feedbackWithWeights.reduce((s, f) => s + f.estimate * f.weight, 0) / totalFW
-    // No comp basis (recommended === null) => go with agent consensus alone,
-    // don't blend it against a comp estimate that doesn't exist.
-    if (recommended != null) {
-      blendCompWeight = 0.60
-      blendFeedbackWeight = 0.40
-      blended = Math.round((recommended * blendCompWeight + agentConsensus * blendFeedbackWeight) / 1000) * 1000
-    } else {
-      blended = Math.round(agentConsensus / 1000) * 1000
-    }
     blendedConf = Math.min(conf + 0.05 * Math.min(validFeedback.length, 3), 0.95)
+  }
+
+  // Three-way weighted blend across whichever signals actually exist:
+  // comp-based (same-area comps + registry), NN model, agent consensus.
+  // Weights are relative and renormalized over just the signals present, so
+  // this reduces exactly to the old two-way (60/40) or single-signal
+  // behavior whenever the NN model hasn't been trained yet.
+  const signals: { value: number; weight: number }[] = []
+  if (recommended != null) signals.push({ value: recommended, weight: 0.60 })
+  if (nnRecommended != null) signals.push({ value: nnRecommended, weight: nnWeight })
+  if (agentConsensus != null && validFeedback.length >= 2) signals.push({ value: agentConsensus, weight: 0.40 })
+
+  if (signals.length > 0) {
+    const totalW = signals.reduce((s, x) => s + x.weight, 0)
+    blended = totalW > 0 ? Math.round(signals.reduce((s, x) => s + x.value * x.weight, 0) / totalW / 1000) * 1000 : blended
+    if (nnRecommended != null) {
+      blendCompWeight = recommended != null ? Math.round((0.60 / totalW) * 100) / 100 : null
+      blendFeedbackWeight = agentConsensus != null ? Math.round((0.40 / totalW) * 100) / 100 : null
+      blendedConf = Math.min(blendedConf + nnWeight * 0.2, 0.95)
+    }
   }
 
   const adjustments: string[] = []
@@ -145,10 +205,11 @@ export async function POST(req: NextRequest) {
        `(${outlierCount > 0 ? outlierCount + ' ακραίες τιμές αφαιρέθηκαν, ' : ''}μεσ. σταθμισμένο ${Math.round(avgPpsqm).toLocaleString('el-GR')} €/τ.μ.).`,
        adjustments.length > 0 ? `Εφαρμόστηκαν διορθώσεις ${adjustments.join(', ')}.` : '',
        validFeedback.length >= 2 ? `Συνεκτιμήθηκαν εκτιμήσεις ${validFeedback.length} παραγωγών (40% βάρος).` : '',
+       nnRecommended != null ? `Μοντέλο ΝΝ: €${nnRecommended.toLocaleString('el-GR')} (${Math.round(nnWeight * 100)}% βάρος στο τελικό).` : '',
        `Εμπιστοσύνη: ${Math.round(blendedConf * 100)}%.`,
-       topCompSentence, probabilitySentence,
+       topCompSentence, probabilitySentence, featureContribText,
       ].filter(Boolean).join(' ')
-    : `Ανεπαρκή συγκρίσιμα στοιχεία για ${prop.area}. Η εκτίμηση είναι ενδεικτική. ${topCompSentence} ${probabilitySentence}`.trim()
+    : `Ανεπαρκή συγκρίσιμα στοιχεία για ${prop.area}. Η εκτίμηση είναι ενδεικτική. ${topCompSentence} ${probabilitySentence} ${featureContribText}`.trim()
 
   const { error: valuationErr } = await sb.from('meeting_valuations').upsert({
     property_id, agency_id: caller.agency_id,
@@ -171,6 +232,8 @@ export async function POST(req: NextRequest) {
     comp_recommended: recommended, comp_confidence: conf, comp_count: comps.length,
     agent_consensus: agentConsensus, feedback_count: validFeedback.length,
     blend_comp_weight: blendCompWeight, blend_feedback_weight: blendFeedbackWeight,
+    blend_nn_weight: nnRecommended != null ? nnWeight : null, nn_recommended: nnRecommended,
+    pricing_model_run_id: modelRun?.id ?? null,
     producer_weight_map: producerWeightMap,
     blended_recommended: blended, blended_confidence: blendedConf,
   })
@@ -189,6 +252,8 @@ export async function POST(req: NextRequest) {
       min, max, recommended, blended_recommended: blended, price_per_sqm: ppsqm, confidence: blendedConf, reasoning,
       outliers_removed: outlierCount, feedback_incorporated: validFeedback.length,
       sale_probability: saleProbability.probability, sale_probability_sample_size: saleProbability.sample_size,
+      nn_recommended: nnRecommended, nn_weight: nnRecommended != null ? nnWeight : null,
+      nn_model_holdout_mae_pct: modelRun?.holdout_mae_pct ?? null,
     },
     top_producers: topProducers?.slice(0, 3) || [],
     comparables: comps.slice(0, 5),

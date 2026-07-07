@@ -48,9 +48,9 @@ function Sec({children}: any){return <div style={{fontSize:11,fontWeight:700,col
 const EMPTY: Record<string, any> = {
   address:'', area:'', property_type:'Διαμέρισμα', transaction_type:'sale', status:'pending',
   sqm:'', floor:'', rooms:'', year_built:'', year_renovated:'', condition:'good',
-  balcony:false, parking:false, security_door:false,
+  balcony:false, parking:false, security_door:false, utilization_score:'',
   asking_price:'', description:'', ai_summary:'', seller_motivation:'',
-  owner_name:'', owner_phone:'', owner_email:'',
+  owner_name:'', owner_phone:'', owner_email:'', lat:null, lng:null,
 }
 
 type HistoryEntry = { kind: 'voice_note' | 'comment' | 'valuation' | 'contact'; date: string; text: string; meta?: string }
@@ -124,9 +124,29 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
     const payload = { ...prop }
     delete payload.id; delete payload.created_at; delete payload.updated_at; delete payload.voice_note_ids
     delete payload.agency_id; delete payload.agent_id; delete payload.owner_contact_id; delete payload.first_registered_by
+    payload.utilization_score = payload.utilization_score ? Number(payload.utilization_score) : null
+
+    // Best-effort geocode so the pricing model (lib/pricingFeatures.ts) can
+    // use this property's real coordinates instead of its area's centroid.
+    // Soft-fails silently — a missing coordinate just means the model keeps
+    // using the area fallback, never blocks saving the property itself.
+    if (payload.address && (payload.lat == null || payload.lng == null)) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        const res = await fetch('/api/geocode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({ address: payload.address, area: payload.area }),
+        })
+        const { coords } = await res.json()
+        if (coords) { payload.lat = coords.lat; payload.lng = coords.lng }
+      } catch { /* geocoding is best-effort */ }
+    }
+
     const { error } = await supabase.from('meeting_properties').update(payload).eq('id', id)
     setSaving(false)
     if (error) { setErr(error.message); return }
+    setProp((x: any) => ({ ...x, lat: payload.lat, lng: payload.lng }))
     setSaved(true)
     setTimeout(()=>setSaved(false),3000)
   }
@@ -182,6 +202,7 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
                 <Field label="Έτος ανακ." value={p.year_renovated} onChange={sp('year_renovated')} type="number"/>
               </div>
               <Sel label="Κατάσταση" value={p.condition} onChange={sp('condition')} options={[{value:'excellent',label:'Άριστη'},{value:'good',label:'Καλή'},{value:'fair',label:'Μέτρια'},{value:'needs_work',label:'Χρειάζεται εργασίες'}]}/>
+              <Sel label="Αξιοποίηση χώρου" value={p.utilization_score} onChange={sp('utilization_score')} options={[{value:'1',label:'1 — Κακή διαρρύθμιση'},{value:'2',label:'2 — Κάτω του μέσου όρου'},{value:'3',label:'3 — Μέτρια'},{value:'4',label:'4 — Καλή διαρρύθμιση'},{value:'5',label:'5 — Άριστη αξιοποίηση'}]}/>
               <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
                 {[{k:'parking',l:'Parking'},{k:'balcony',l:'Μπαλκόνι'},{k:'security_door',l:'Ασφ. Πόρτα'}].map(x=>(
                   <button key={x.k} onClick={()=>setProp((pr: any)=>({...pr,[x.k]:!pr[x.k]}))} style={{padding:'6px 12px',borderRadius:99,border:'1px solid '+(p[x.k]?C.green:C.border),background:p[x.k]?C.greenLight:C.white,color:p[x.k]?C.green:C.muted,fontSize:12,fontWeight:600,cursor:'pointer'}}>
