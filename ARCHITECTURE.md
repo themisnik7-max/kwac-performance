@@ -65,6 +65,18 @@ Found (migration 031) 13 tables with an old, pre-multi-tenancy-hardening policy 
 
    Also computes an honest probability-of-sale-within-6-months (empirical frequency table over closed comps, reports "insufficient data" below 8 comps rather than a fabricated percentage) and cites the top comparable by address/size/days-on-market in its reasoning text — never a fabricated name.
 
+## AI data as company "soul" — retention + future fine-tuning/RAG direction
+
+Explicit product direction (2026-07): `ai_admin_actions_log`, `valuation_calibration_log`, `meeting_comments`, `ai_admin_usage_daily`, and anything else that logs an AI decision or an agent's response to one, are being kept as durable training data — eventually either (a) fine-tuning an **open-source** model (e.g. Llama 3) on the company's own accumulated history, or (b) a `pgvector`-backed retrieval layer so Claude (the AI Admin) can pull up "what actually worked here before" as context, not from its own training data.
+
+**Standing rules this implies, going forward:**
+- **Never add a cleanup/TTL/archival job that deletes rows from these tables.** Nothing in the codebase does today (verified) — keep it that way. If a table genuinely needs pruning for cost/performance reasons later, archive (move to cold storage), don't delete.
+- **New AI-adjacent features should log real inputs/outputs, not just a summary.** `ai_admin_actions_log.tool_args`/`result_summary` already do this reasonably; keep that bar for anything new.
+- **Outcome/conversion signal is the actual bottleneck, not row count.** `marketing_campaign_recipients` (click tracking) and `valuation_calibration_log` + `valuation_backtest_results` (predicted vs. actual, holdout accuracy) are the two places that already close the loop — action → real-world result, not just action → logged. Most AI Admin actions (`add_contact`, `create_open_house`, etc.) don't have any downstream outcome link yet, and closing that gap generically (without inventing a fake "success" for actions that don't have one) is unsolved — worth a dedicated design pass before investing further in fine-tuning/RAG on top of it.
+- **`ai_insights`** table (`insight_type, content, data_snapshot, thumbs_up, thumbs_down`) already has exactly the schema for capturing human-rated AI output, but nothing in the app reads or writes it — fully dormant. Wiring this up (even just a thumbs up/down on AI Admin replies) would be a cheap, high-value next step toward real "what worked" data.
+- **`pgvector` extension is enabled** (migration 041) but **no embeddings table exists yet, on purpose** — every candidate source table's real (non-demo) row count is single-to-low-double-digits today; a similarity search against that little data has nothing useful to retrieve. Build the embeddings table + generation pipeline once real usage volume exists, not before.
+- **Fine-tuning target, if/when pursued, should be the AI Admin assistant (tone, domain knowledge, tool-selection judgment) — not the pricing engine.** The property valuation model is deliberately staying a small, transparent, from-scratch network (`lib/miniNet.ts`) per the explicit no-black-box decision already made for that specific system — that decision is unrelated to and unaffected by this AI-Admin-focused direction, and the two shouldn't get conflated later.
+
 ## Cross-agent activity aggregation (Monitor "Παραγωγή" / Intelligence OP "Παραγωγή")
 
 `lib/officeMetrics.ts`'s `getOfficeActivityMetrics(sb, agencyId)` is the one implementation, grouped by team (`agents.team`) with a `solo` bucket for untagged agents plus office-wide totals. Two consumers, admin-only both:
