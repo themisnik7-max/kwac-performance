@@ -29,9 +29,25 @@ export function PropertyPhotoUpload({ propertyId, initialPhotos = [] }: Props) {
   const [photos,     setPhotos]    = useState<Photo[]>(initialPhotos)
   const [statuses,   setStatuses]  = useState<{ name: string; state: 'uploading' | 'done' | 'error'; error?: string }[]>([])
   const [deleting,   setDeleting]  = useState<string | null>(null)
-  const [lightbox,   setLightbox]  = useState<string | null>(null)
+  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null)
   const [dragOver,   setDragOver]  = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  const showPrev = useCallback(() => setLightboxIdx(i => i === null ? null : (i - 1 + photos.length) % photos.length), [photos.length])
+  const showNext = useCallback(() => setLightboxIdx(i => i === null ? null : (i + 1) % photos.length), [photos.length])
+
+  // Left/right cycles through the other photos instead of having to close
+  // and reopen the lightbox for each one; Escape still closes it.
+  useEffect(() => {
+    if (lightboxIdx === null) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'ArrowLeft') showPrev()
+      else if (e.key === 'ArrowRight') showNext()
+      else if (e.key === 'Escape') setLightboxIdx(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightboxIdx, showPrev, showNext])
 
   // Photos already uploaded in a previous visit never showed up here before —
   // this component only ever refreshed its list right after a fresh upload,
@@ -173,7 +189,7 @@ export function PropertyPhotoUpload({ propertyId, initialPhotos = [] }: Props) {
       {/* Photo grid */}
       {photos.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: 6, marginTop: 10 }}>
-          {photos.map(p => (
+          {photos.map((p, i) => (
             <div
               key={p.id}
               style={{ position: 'relative', aspectRatio: '1', borderRadius: 6, overflow: 'hidden', background: '#1a1a1a', cursor: 'pointer' }}
@@ -182,7 +198,7 @@ export function PropertyPhotoUpload({ propertyId, initialPhotos = [] }: Props) {
               <img
                 src={p.url}
                 alt={p.original_name ?? 'photo'}
-                onClick={() => setLightbox(p.url)}
+                onClick={() => setLightboxIdx(i)}
                 style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                 loading="lazy"
               />
@@ -205,10 +221,11 @@ export function PropertyPhotoUpload({ propertyId, initialPhotos = [] }: Props) {
         </div>
       )}
 
-      {/* Lightbox */}
-      {lightbox && (
+      {/* Lightbox — arrows cycle through the other photos instead of having
+          to close and reopen for each one */}
+      {lightboxIdx !== null && (
         <div
-          onClick={() => setLightbox(null)}
+          onClick={() => setLightboxIdx(null)}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -217,10 +234,35 @@ export function PropertyPhotoUpload({ propertyId, initialPhotos = [] }: Props) {
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={lightbox}
+            src={photos[lightboxIdx].url}
             alt="photo"
             style={{ maxWidth: '100%', maxHeight: '100%', borderRadius: 8, objectFit: 'contain' }}
           />
+          {photos.length > 1 && (
+            <>
+              <button
+                onClick={e => { e.stopPropagation(); showPrev() }}
+                aria-label="Προηγούμενη"
+                style={{
+                  position: 'fixed', left: 16, top: '50%', transform: 'translateY(-50%)',
+                  width: 44, height: 44, borderRadius: '50%', border: 'none',
+                  background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: 22,
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>‹</button>
+              <button
+                onClick={e => { e.stopPropagation(); showNext() }}
+                aria-label="Επόμενη"
+                style={{
+                  position: 'fixed', right: 16, top: '50%', transform: 'translateY(-50%)',
+                  width: 44, height: 44, borderRadius: '50%', border: 'none',
+                  background: 'rgba(255,255,255,.12)', color: '#fff', fontSize: 22,
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>›</button>
+              <div style={{ position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', color: 'rgba(255,255,255,.7)', fontSize: 12 }}>
+                {lightboxIdx + 1} / {photos.length}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

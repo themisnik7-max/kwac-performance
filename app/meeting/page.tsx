@@ -168,17 +168,22 @@ export default function MeetingPage() {
     if (p.agent_id !== agent?.id) return
     setSettingAppraisal(true)
     const newStatus = p.status === 'for_appraisal' ? 'pending' : 'for_appraisal'
-    const { error } = await sb
-      .from('meeting_properties')
-      .update({ status: newStatus })
-      .eq('id', p.id)
+    // Server route, not a raw client update — this is also what auto-triggers
+    // the AI valuation the moment a property enters for_appraisal, so the
+    // estimate already exists by the time anyone opens it (see
+    // app/api/meeting-properties/set-status).
+    const res = await authedFetch('/api/meeting-properties/set-status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ property_id: p.id, status: newStatus }),
+    })
+    const data = await res.json()
     setSettingAppraisal(false)
-    if (error) { showToast('❌ ' + error.message); return }
+    if (!res.ok) { showToast('❌ ' + (data.error || 'Σφάλμα')); return }
     showToast(newStatus === 'for_appraisal' ? '✅ Ορισθηκε ως Προς Εκτιμηση' : '✅ Επεστρεψε σε Εκκρεμει')
     // Optimistic local update — avoids full refetch
-    const patch = (pr: any) => pr.id === p.id ? { ...pr, status: newStatus } : pr
+    const patch = (pr: any) => pr.id === p.id ? { ...pr, status: data.valuation_triggered ? 'estimated' : newStatus } : pr
     setProps(prev => prev.map(patch))
-    setSelected((prev: any) => prev?.id === p.id ? { ...prev, status: newStatus } : prev)
+    setSelected((prev: any) => prev?.id === p.id ? { ...prev, status: data.valuation_triggered ? 'estimated' : newStatus } : prev)
   }
 
   async function submitComment() {
@@ -576,33 +581,50 @@ export default function MeetingPage() {
                   </div>
                 )}
 
-                {/* ── AI Valuation ── */}
+                {/* ── AI Valuation — compact "opinion of value" style: one
+                    highlighted number, a small stat row, and a short bulleted
+                    report (never more than a handful of lines) instead of a
+                    dense paragraph ── */}
                 {valuation && (
                   <div style={{ marginBottom: 20 }}>
                     <div style={{ background: '#1a1a1a', borderRadius: 12, padding: '1.25rem', color: '#fff', marginBottom: 12 }}>
-                      <div style={{ fontSize: 11, color: '#B0B0B0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.05em' }}>AI Εκτιμηση</div>
-                      <div style={{ fontSize: 28, fontWeight: 700, color: '#CC2229', marginBottom: 4 }}>
-                        {fmtE(valuation.ai_recommended || valuation.recommended)}
-                      </div>
-                      <div style={{ fontSize: 13, color: '#B0B0B0' }}>
-                        Ευρος: {fmtE(valuation.ai_min || valuation.min)} – {fmtE(valuation.ai_max || valuation.max)}
-                      </div>
-                      {(valuation.ai_price_per_sqm || valuation.price_per_sqm) && (
-                        <div style={{ fontSize: 13, color: '#B0B0B0' }}>
-                          {fmtE(valuation.ai_price_per_sqm || valuation.price_per_sqm)}/τμ
+                      <div style={{ fontSize: 11, color: '#B0B0B0', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>Εκτιμώμενη Αξία</div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+                        <div style={{ fontSize: 30, fontWeight: 700, color: '#CC2229' }}>
+                          {fmtE(valuation.ai_recommended || valuation.recommended)}
                         </div>
-                      )}
-                      <div style={{ marginTop: 8, background: 'rgba(255,255,255,.1)', borderRadius: 100, height: 6, overflow: 'hidden' }}>
-                        <div style={{ height: '100%', background: '#CC2229', width: ((valuation.confidence_score || valuation.confidence || 0.5) * 100) + '%', transition: 'width 0.5s' }} />
+                        <div style={{ fontSize: 13, color: '#B0B0B0' }}>
+                          {fmtE(valuation.ai_min || valuation.min)} – {fmtE(valuation.ai_max || valuation.max)}
+                        </div>
                       </div>
-                      <div style={{ fontSize: 11, color: '#B0B0B0', marginTop: 3 }}>
-                        Εμπιστοσυνη: {Math.round((valuation.confidence_score || valuation.confidence || 0.5) * 100)}%
+                      <div style={{ display: 'flex', gap: 20, marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,.1)' }}>
+                        {(valuation.ai_price_per_sqm || valuation.price_per_sqm) && (
+                          <div>
+                            <div style={{ fontSize: 10, color: '#B0B0B0', textTransform: 'uppercase', letterSpacing: '.05em' }}>€/τ.μ.</div>
+                            <div style={{ fontSize: 15, fontWeight: 600 }}>{fmtE(valuation.ai_price_per_sqm || valuation.price_per_sqm)}</div>
+                          </div>
+                        )}
+                        <div>
+                          <div style={{ fontSize: 10, color: '#B0B0B0', textTransform: 'uppercase', letterSpacing: '.05em' }}>Εμπιστοσύνη</div>
+                          <div style={{ fontSize: 15, fontWeight: 600 }}>{Math.round((valuation.confidence_score || valuation.confidence || 0.5) * 100)}%</div>
+                        </div>
+                        {valuation.sale_probability != null && (
+                          <div>
+                            <div style={{ fontSize: 10, color: '#B0B0B0', textTransform: 'uppercase', letterSpacing: '.05em' }}>Πιθ. πώλησης 6μ</div>
+                            <div style={{ fontSize: 15, fontWeight: 600 }}>{Math.round(valuation.sale_probability * 100)}%</div>
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ marginTop: 10, background: 'rgba(255,255,255,.1)', borderRadius: 100, height: 5, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', background: '#CC2229', width: ((valuation.confidence_score || valuation.confidence || 0.5) * 100) + '%', transition: 'width 0.5s' }} />
                       </div>
                     </div>
                     {(valuation.ai_reasoning || valuation.reasoning) && (
-                      <p style={{ fontSize: 13, color: '#555', lineHeight: 1.7, background: '#f8f8f7', borderRadius: 8, padding: '10px 12px', margin: '0 0 12px' }}>
-                        {valuation.ai_reasoning || valuation.reasoning}
-                      </p>
+                      <div style={{ background: '#f8f8f7', borderRadius: 8, padding: '10px 12px', margin: '0 0 12px' }}>
+                        {(valuation.ai_reasoning || valuation.reasoning).split('\n').filter(Boolean).map((line: string, i: number) => (
+                          <div key={i} style={{ fontSize: 13, color: '#444', lineHeight: 1.6, padding: '3px 0' }}>{line}</div>
+                        ))}
+                      </div>
                     )}
                     {(valuation.comparables || []).length > 0 && (
                       <div style={{ marginTop: 4 }}>

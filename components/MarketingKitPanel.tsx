@@ -245,6 +245,20 @@ export default function MarketingKitPanel({ prop, user }: Props) {
     })
     window.open(`/marketing/open-house?d=${d}`, '_blank')
     setOhModal(false)
+
+    // Also schedules the event + posts it to the Board's Ανακοινώσεις tab
+    // with a 2-slot volunteer signup — fire-and-forget, the brochure itself
+    // already opened and shouldn't wait on this.
+    authedFetch('/api/marketing/open-house-announce', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        address: prop.address || prop.area || 'Ακίνητο', area: prop.area || null,
+        ilist_code: prop.ilist_code || null, property_type: prop.property_type || null,
+        sqm: prop.sqm || null, price: prop.price_asking || null,
+        date: ohDate, start_time: ohStart, end_time: ohEnd,
+      }),
+    }).catch(() => {})
   }
 
   return (
