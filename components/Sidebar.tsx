@@ -5,7 +5,7 @@ import { useApp } from "@/lib/AppContext";
 const RED = "#CC2229";
 
 const AGENT_LINKS = [
-  { href: "/intelligence", icon: "✦", label: "Intelligence" },
+  { href: "/intelligence", icon: "✦", label: "Intelligence OP" },
   { href: "/dashboard",    icon: "⊞", label: "Dashboard" },
   { href: "/submit",       icon: "✎", label: "Μετρησιμότητα" },
   { href: "/meeting",      icon: "⬡", label: "Meeting" },

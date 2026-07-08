@@ -2,7 +2,7 @@
 import{useState}from"react";
 import{supabase}from"@/lib/supabase";
 const RED="#CC2229";
-const EXPORTS=[{key:"contacts",label:"Επαφές",icon:"◎",desc:"Επαφές με τηλέφωνο, email, πηγή",table:"contacts",order:"created_at"},{key:"properties",label:"Ακίνητα",icon:"⬡",desc:"Ακίνητα από iList",table:"properties",order:"created_at"},{key:"weekly_submissions",label:"Μετρησιμότητα",icon:"✎",desc:"Εβδομαδιαίες καταχωρήσεις",table:"weekly_submissions",order:"week_start"},{key:"email_leads",label:"Email Leads",icon:"✉",desc:"Leads από email",table:"email_leads",order:"created_at"},{key:"sprint_entries",label:"Sprint Calls",icon:"▶",desc:"Καταχωρήσεις sprint",table:"sprint_entries",order:"created_at"}];
+const EXPORTS=[{key:"contacts",label:"Επαφές",icon:"◎",desc:"Επαφές με τηλέφωνο, email, πηγή",table:"contacts",order:"created_at"},{key:"properties",label:"Ακίνητα",icon:"⬡",desc:"Ακίνητα από iList",table:"properties",order:"created_at"},{key:"weekly_submissions",label:"Μετρησιμότητα",icon:"✎",desc:"Εβδομαδιαίες καταχωρήσεις",table:"weekly_submissions",order:"submitted_at"},{key:"email_leads",label:"Email Leads",icon:"✉",desc:"Leads από email",table:"email_leads",order:"created_at"},{key:"sprint_entries",label:"Sprint Calls",icon:"▶",desc:"Καταχωρήσεις sprint",table:"sprint_entries",order:"created_at"}];
 function toCSV(d){if(!d.length)return"";const h=Object.keys(d[0]);const rows=d.map(row=>h.map(k=>{const v=row[k];if(v===null||v===undefined)return"";const s=Array.isArray(v)?v.join(";"):String(v);return s.includes(",")||s.includes('"')||s.includes("\n")?'"'+s.replace(/"/g,'""')+'"':s;}).join(","));return[h.join(","),...rows].join("\n");}
 function dl(csv,name){const b=new Blob(["﻿"+csv],{type:"text/csv;charset=utf-8;"});const u=URL.createObjectURL(b);const a=document.createElement("a");a.href=u;a.download=name;a.click();URL.revokeObjectURL(u);}
 export default function ExportPage(){
@@ -11,7 +11,7 @@ const[loading,setLoading]=useState({});const[done,setDone]=useState({});
 // an agent can only ever export their own agency's rows.
 const doExp=async(exp)=>{setLoading(l=>({...l,[exp.key]:true}));try{const{data,error}=await supabase.from(exp.table).select("*").order(exp.order,{ascending:false}).limit(10000);if(error)throw error;dl(toCSV(data||[]),"kwac_"+exp.key+"_"+new Date().toISOString().split("T")[0]+".csv");setDone(d=>({...d,[exp.key]:(data||[]).length}));}catch(e){alert(e.message);}setLoading(l=>({...l,[exp.key]:false}));};
 const doAll=async()=>{for(const e of EXPORTS)await doExp(e);};
-return(<div style={{padding:"32px 40px",minHeight:"100vh"}}>
+return(<div style={{padding:"32px 40px",minHeight:"100vh",background:"#0d0d0d"}}>
   <div style={{marginBottom:32,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
     <div>
       <div style={{fontSize:11,color:"#555",textTransform:"uppercase",letterSpacing:".12em",marginBottom:6}}>Export</div>

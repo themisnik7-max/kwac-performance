@@ -7,7 +7,7 @@ import { authedFetch } from '@/lib/authedFetch'
 const fmt = (n) => (n || 0).toLocaleString('el-GR')
 const pct = (a, b) => b > 0 ? Math.round((a / b) * 100) : 0
 
-function KPI({ label, value, sub, color }) {
+function KPI({ label, value, sub = null, color = null }) {
   return (
     <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1rem 1.25rem' }}>
       <div style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{label}</div>
@@ -101,11 +101,19 @@ function AgentIntelligence() {
 
 function CeoIntelligence() {
   const [data, setData] = useState(null)
+  const [production, setProduction] = useState(null)
   const [tab, setTab] = useState('overview')
   const [chatQ, setChatQ] = useState('')
   const [chatA, setChatA] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
   const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    // Same lib/officeMetrics.ts aggregation Monitor's Παραγωγή tab uses — this
+    // page shows the macro/office-wide read of it, Monitor has the per-agent
+    // operational drill-down.
+    authedFetch('/api/monitor/production').then(r => r.json()).then(setProduction).catch(() => {})
+  }, [])
 
   useEffect(() => {
     authedFetch('/api/intelligence').then(r => r.json()).then(raw => {
@@ -144,7 +152,7 @@ function CeoIntelligence() {
   }
 
   const insightBorder = (type) => type === 'warning' ? '#CC2229' : type === 'opportunity' ? '#3B6D11' : '#378ADD'
-  const TABS = [{ key: 'overview', label: 'Επισκόπηση' }, { key: 'agents', label: 'Μεσίτες' }, { key: 'areas', label: 'Περιοχές' }, { key: 'chat', label: '🤖 AI Ανάλυση' }]
+  const TABS = [{ key: 'overview', label: 'Επισκόπηση' }, { key: 'production', label: 'Παραγωγή' }, { key: 'agents', label: 'Μεσίτες' }, { key: 'areas', label: 'Περιοχές' }, { key: 'chat', label: '🤖 AI Ανάλυση' }]
 
   return (
     <div>
@@ -172,6 +180,49 @@ function CeoIntelligence() {
           </div>
         </div>
       )}
+      {tab === 'production' && (() => {
+        if (!production) return <div style={{ padding: '3rem', textAlign: 'center', color: '#bbb' }}>Φόρτωση...</div>
+        const t = production.officeTotals
+        return (
+          <div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 20 }}>
+              <KPI label="Καταγραφές" value={fmt(t.calls)} sub="σύνολο γραφείου" />
+              <KPI label="Αναθέσεις" value={fmt(t.mandates)} sub="σύνολο γραφείου" color="#CC2229" />
+              <KPI label="Προσφορές" value={fmt(t.offers)} sub="σύνολο γραφείου" />
+              <KPI label="Κλεισίματα" value={fmt(t.closings)} sub="σύνολο γραφείου" color="#3B6D11" />
+              <KPI label="Ζητήσεις" value={fmt(t.demand)} sub="ενεργές" />
+              <KPI label="Προκαταβολές" value={fmt(t.deposits)} sub="σύνολο γραφείου" />
+              <KPI label="2α Ραντεβού" value={fmt(t.second_appointments)} sub="σύνολο γραφείου" />
+              <KPI label="Εβδ. Υποβολές" value={fmt(t.weeks_submitted)} sub="σύνολο γραφείου" />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: production.teams.length ? '1fr 1fr' : '1fr', gap: 16 }}>
+              {production.teams.map(team => (
+                <div key={team.team} style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1.25rem' }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4 }}>👥 Ομάδα: {team.team}</div>
+                  <div style={{ fontSize: 12, color: '#888', marginBottom: 14 }}>{team.agents.length} μεσίτες</div>
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                    {[['Αναθέσεις', team.totals.mandates], ['Προσφορές', team.totals.offers], ['Κλεισίματα', team.totals.closings], ['Ζητήσεις', team.totals.demand]].map(([l, v]) => (
+                      <div key={l}><div style={{ fontSize: 20, fontWeight: 600 }}>{v}</div><div style={{ fontSize: 11, color: '#888' }}>{l}</div></div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {production.solo.length > 0 && (
+                <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1.25rem' }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 4 }}>🧍 Solo Μεσίτες</div>
+                  <div style={{ fontSize: 12, color: '#888', marginBottom: 14 }}>{production.solo.length} μεσίτες</div>
+                  <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                    {[['Αναθέσεις', production.solo.reduce((s,a)=>s+a.mandates,0)], ['Προσφορές', production.solo.reduce((s,a)=>s+a.offers,0)], ['Κλεισίματα', production.solo.reduce((s,a)=>s+a.closings,0)], ['Ζητήσεις', production.solo.reduce((s,a)=>s+a.demand,0)]].map(([l, v]) => (
+                      <div key={l}><div style={{ fontSize: 20, fontWeight: 600 }}>{v}</div><div style={{ fontSize: 11, color: '#888' }}>{l}</div></div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div style={{ marginTop: 12, fontSize: 11, color: '#bbb' }}>Λεπτομέρεια ανά μεσίτη στο <a href="/monitor" style={{ color: '#CC2229' }}>Monitor → Παραγωγή</a>.</div>
+          </div>
+        )
+      })()}
       {tab === 'agents' && (
         <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1.25rem' }}>
           <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Απόδοση ανά Μεσίτη</div>
@@ -225,8 +276,8 @@ export default function IntelligencePage() {
     <Shell>
       <div style={{ padding: '2rem', maxWidth: 1100 }}>
         <div style={{ marginBottom: '1.5rem' }}>
-          <h1 style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', margin: 0 }}>{isCeo ? 'Intelligence — Εταιρική Εικόνα' : 'Intelligence — Η Πρόοδός μου'}</h1>
-          <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>{isCeo ? 'Συγκεντρωτική εικόνα portfolio, μεσιτών, περιοχών' : 'Προσωπική ανάλυση, coaching insights, στόχοι vs πραγματικότητα'}</p>
+          <h1 style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', margin: 0 }}>{isCeo ? 'Intelligence OP — Εταιρική Εικόνα' : 'Intelligence OP — Η Πρόοδός μου'}</h1>
+          <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>{isCeo ? 'Συγκεντρωτική εικόνα portfolio, παραγωγής και περιοχών — όλο το γραφείο μακροσκοπικά' : 'Προσωπική ανάλυση, coaching insights, στόχοι vs πραγματικότητα'}</p>
         </div>
         {isCeo ? <CeoIntelligence /> : <AgentIntelligence />}
       </div>

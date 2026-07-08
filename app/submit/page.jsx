@@ -43,6 +43,8 @@ const SECTIONS = [
     { k: "contract_buyer", l: "Συμβόλαιο Αγοραστή" },
     { k: "offer_buyer", l: "Προσφορά Αγοραστή" },
     { k: "offer_tenant", l: "Προσφορά Ενοικιαστή" },
+    { k: "deposit_office", l: "Προκαταβολή (γραφείο)" },
+    { k: "deposit_client", l: "Προκαταβολή (πελάτης)" },
   ]},
   { key: "marketing", label: "Marketing", color: "#06b6d4", fields: [
     { k: "photo_professional", l: "Επαγγελματική Φωτογράφιση" },
@@ -62,7 +64,7 @@ const SECTIONS = [
   ]},
 ];
 
-const XP_MAP = {cold_calls:1,follow_up:1,leads_cold:3,leads_cultivation:3,leads_mail:3,leads_social:3,leads_database:3,meet1_seller_live:15,meet1_seller_phone:10,meet2_seller:25,meet1_buyer_live:15,meet1_buyer_phone:10,meet1_tenant_live:10,meet1_tenant_phone:7,excl_listing_sale:80,simple_listing_sale:40,excl_rental_high:60,excl_rental_low:40,simple_rental:20,contract_seller:150,contract_buyer:150,collab_internal:30,collab_external:30,offer_buyer:10,offer_tenant:10,photo_professional:5,open_house:20,matterport:15,new_partner:25,referral_sent:10,referral_received:10,training_meeting:5,admin_1on1:5};
+const XP_MAP = {cold_calls:1,follow_up:1,leads_cold:3,leads_cultivation:3,leads_mail:3,leads_social:3,leads_database:3,meet1_seller_live:15,meet1_seller_phone:10,meet2_seller:25,meet1_buyer_live:15,meet1_buyer_phone:10,meet1_tenant_live:10,meet1_tenant_phone:7,excl_listing_sale:80,simple_listing_sale:40,excl_rental_high:60,excl_rental_low:40,simple_rental:20,contract_seller:150,contract_buyer:150,collab_internal:30,collab_external:30,offer_buyer:10,offer_tenant:10,deposit_office:15,deposit_client:15,photo_professional:5,open_house:20,matterport:15,new_partner:25,referral_sent:10,referral_received:10,training_meeting:5,admin_1on1:5};
 
 function getWeekInfo(d) {
   const date = new Date(d.getTime());
@@ -136,16 +138,16 @@ export default function SubmitPage() {
   }
 
   if (agentLoading || loadingExisting) {
-    return <div style={{ padding: "32px 40px", color: "#555" }}>Φόρτωση...</div>;
+    return <div style={{ padding: "32px 40px", minHeight: "100vh", background: "#0d0d0d", color: "#888" }}>Φόρτωση...</div>;
   }
   if (!agent) {
-    return <div style={{ padding: "32px 40px", color: "#888" }}>Χρειάζεται σύνδεση για να υποβάλεις δεδομένα.</div>;
+    return <div style={{ padding: "32px 40px", minHeight: "100vh", background: "#0d0d0d", color: "#888" }}>Χρειάζεται σύνδεση για να υποβάλεις δεδομένα.</div>;
   }
 
   const locked = !isEditable;
 
   return (
-    <div style={{ padding: "32px 40px", minHeight: "100vh" }}>
+    <div style={{ padding: "32px 40px", minHeight: "100vh", background: "#0d0d0d" }}>
       <div style={{ marginBottom: 32, display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
         <div>
           <div style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: ".12em", marginBottom: 6 }}>Μετρησιμότητα</div>

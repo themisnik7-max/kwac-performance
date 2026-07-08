@@ -16,7 +16,7 @@ function relativeDate(d) {
 }
 const ROUTE_LABELS = { '/intelligence':'Intelligence','/dashboard':'Dashboard','/submit':'Μετρησιμότητα','/meeting':'Meeting','/import':'iList Import','/profile':'Χάρτης','/sprint':'Sprint Calls','/board':'Ανακοινώσεις','/gps':'GPS Goals','/export':'Export','/monitor':'Monitor' }
 function pct(a,b){return b>0?Math.round((a/b)*100):0}
-function KPICard({label,value,sub,color}){return(<div style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,padding:'1rem 1.25rem'}}><div style={{fontSize:11,color:'#888',marginBottom:4}}>{label}</div><div style={{fontSize:22,fontWeight:600,color:color||'#1a1a1a'}}>{value}</div>{sub&&<div style={{fontSize:11,color:'#aaa',marginTop:2}}>{sub}</div>}</div>)}
+function KPICard({label,value,sub=null,color=null}){return(<div style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,padding:'1rem 1.25rem'}}><div style={{fontSize:11,color:'#888',marginBottom:4}}>{label}</div><div style={{fontSize:22,fontWeight:600,color:color||'#1a1a1a'}}>{value}</div>{sub&&<div style={{fontSize:11,color:'#aaa',marginTop:2}}>{sub}</div>}</div>)}
 
 export default function MonitorPage() {
   const { role } = useApp()
@@ -24,6 +24,7 @@ export default function MonitorPage() {
   const [agents,setAgents]=useState([])
   const [topRoutes,setTopRoutes]=useState([])
   const [kpis,setKpis]=useState(null)
+  const [production,setProduction]=useState(null)
   const [loading,setLoading]=useState(true)
   const [tab,setTab]=useState('compliance')
   const [filter,setFilter]=useState('all')
@@ -35,6 +36,7 @@ export default function MonitorPage() {
     if(!isCeo) return
     setLoading(true)
     authedFetch('/api/monitor').then(r=>r.json()).then(d=>{setAgents(d.agents||[]);setTopRoutes(d.topRoutes||[]);setKpis(d.systemKPIs||null);setLoading(false)}).catch(()=>setLoading(false))
+    authedFetch('/api/monitor/production').then(r=>r.json()).then(d=>setProduction(d)).catch(()=>{})
   },[isCeo])
   useEffect(()=>{load()},[load])
 
@@ -72,7 +74,7 @@ export default function MonitorPage() {
         </div>
         {total>0&&<div style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,padding:'1rem 1.25rem',marginBottom:20}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{fontSize:13,fontWeight:500}}>Μετρησιμότητα αυτής της εβδομάδας</span><span style={{fontSize:13,color:'#888'}}>{submitted}/{total}</span></div><div style={{background:'#f0f0f0',borderRadius:100,height:10,overflow:'hidden'}}><div style={{height:'100%',borderRadius:100,background:submitted===total?'#3B6D11':submitted>=total*0.7?'#BA7517':'#CC2229',width:pct(submitted,total)+'%',transition:'width .5s ease'}} /></div></div>}
         <div style={{display:'flex',gap:6,marginBottom:16}}>
-          {[{key:'compliance',label:'📋 Compliance'},{key:'activity',label:'🔥 Δραστηριότητα'},{key:'kpis',label:'📊 System KPIs'}].map(t=>(
+          {[{key:'compliance',label:'📋 Compliance'},{key:'activity',label:'🔥 Δραστηριότητα'},{key:'kpis',label:'📊 System KPIs'},{key:'production',label:'🏗️ Παραγωγή'}].map(t=>(
             <button key={t.key} onClick={()=>setTab(t.key)} style={{padding:'7px 16px',borderRadius:8,border:'none',fontSize:13,fontWeight:500,cursor:'pointer',background:tab===t.key?'#1a1a1a':'#fff',color:tab===t.key?'#fff':'#666',outline:tab===t.key?'none':'0.5px solid #e8e8e8'}}>{t.label}</button>
           ))}
         </div>
@@ -157,6 +159,71 @@ export default function MonitorPage() {
             </div>
           </div>
         )}
+        {tab==='production'&&(()=>{
+          if(!production) return <div style={{padding:'3rem',textAlign:'center',color:'#bbb'}}>Φόρτωση...</div>
+          const METRIC_COLS=[
+            {k:'calls',l:'Καταγραφές'},{k:'second_appointments',l:'2α Ραντεβού'},{k:'mandates',l:'Αναθέσεις'},
+            {k:'demand',l:'Ζητήσεις'},{k:'showings',l:'Υποδείξεις'},{k:'offers',l:'Προσφορές'},
+            {k:'deposits',l:'Προκαταβολές'},{k:'closings',l:'Κλεισίματα'},{k:'weeks_submitted',l:'Εβδ. Μετρ.'},
+          ]
+          const ProductionTable=({rows,title,totals=null})=>(
+            <div style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,overflow:'hidden',marginBottom:16}}>
+              <div style={{padding:'0.85rem 1.25rem',borderBottom:'0.5px solid #f0f0f0',fontSize:14,fontWeight:500,display:'flex',justifyContent:'space-between'}}>
+                <span>{title}</span>
+                {totals&&<span style={{fontSize:12,color:'#888',fontWeight:400}}>{rows.length} μεσίτες</span>}
+              </div>
+              <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13,minWidth:760}}>
+                <thead><tr style={{background:'#F8F8F7'}}>
+                  <th style={{textAlign:'left',padding:'8px 12px',fontWeight:500,color:'#888',fontSize:11}}>Μεσίτης</th>
+                  {METRIC_COLS.map(c=><th key={c.k} style={{textAlign:'right',padding:'8px 10px',fontWeight:500,color:'#888',fontSize:11}}>{c.l}</th>)}
+                  <th style={{textAlign:'right',padding:'8px 12px',fontWeight:500,color:'#888',fontSize:11}}>XP</th>
+                </tr></thead>
+                <tbody>
+                  {rows.map(a=>(
+                    <tr key={a.agent_id} style={{borderBottom:'0.5px solid #F8F8F8'}}>
+                      <td style={{padding:'10px 12px',fontWeight:500}}>{a.full_name}</td>
+                      {METRIC_COLS.map(c=><td key={c.k} style={{padding:'10px',textAlign:'right',color:a[c.k]>0?'#1a1a1a':'#ccc'}}>{a[c.k]}</td>)}
+                      <td style={{padding:'10px 12px',textAlign:'right',color:'#CC2229',fontWeight:600}}>{a.xp_total}</td>
+                    </tr>
+                  ))}
+                  {totals&&(
+                    <tr style={{background:'#F8F8F7',fontWeight:600}}>
+                      <td style={{padding:'10px 12px'}}>Σύνολο</td>
+                      {METRIC_COLS.map(c=><td key={c.k} style={{padding:'10px',textAlign:'right'}}>{totals[c.k]}</td>)}
+                      <td style={{padding:'10px 12px',textAlign:'right',color:'#CC2229'}}>{totals.xp_total}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              </div>
+            </div>
+          )
+          const maxClosings=Math.max(...production.agents.map(a=>a.closings),1)
+          return (
+            <div>
+              <div style={{fontSize:11,color:'#ccc',marginBottom:16,lineHeight:1.6}}>
+                Συγκεντρωτικά δεδομένα από τις εβδομαδιαίες υποβολές (Μετρησιμότητα), τις ζητήσεις πελατών και τις υποδείξεις ακινήτων κάθε μεσίτη — το ίδιο view ανά μεσίτη υπάρχει στο Personal Admin του καθενός· εδώ φαίνονται όλοι μαζί. «Υποδείξεις» θα δείχνει 0 μέχρι να υπάρξει σημείο καταχώρησής τους στην εφαρμογή.
+              </div>
+
+              {production.teams.map((t)=>(
+                <ProductionTable key={t.team} rows={t.agents} totals={t.totals} title={`👥 Ομάδα: ${t.team}`} />
+              ))}
+              {production.solo.length>0&&<ProductionTable rows={production.solo} title="🧍 Solo Μεσίτες" />}
+              <ProductionTable rows={production.agents} totals={production.officeTotals} title="🏢 Σύνολο Γραφείου" />
+
+              <div style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,padding:'1.25rem',marginTop:4}}>
+                <div style={{fontSize:14,fontWeight:500,marginBottom:16}}>Κλεισίματα ανά μεσίτη</div>
+                {production.agents.filter(a=>a.role==='agent').sort((a,b)=>b.closings-a.closings).map(a=>(
+                  <div key={a.agent_id} style={{marginBottom:10}}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:3}}><span style={{fontSize:13}}>{a.full_name}{a.team?<span style={{color:'#aaa'}}> · {a.team}</span>:''}</span><span style={{fontSize:12,color:'#888',fontWeight:500}}>{a.closings}</span></div>
+                    <div style={{background:'#f0f0f0',borderRadius:100,height:6,overflow:'hidden'}}><div style={{height:'100%',borderRadius:100,background:'#CC2229',width:Math.max(Math.round((a.closings/maxClosings)*100),a.closings>0?4:0)+'%'}} /></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })()}
       </div>
     </Shell>
   )

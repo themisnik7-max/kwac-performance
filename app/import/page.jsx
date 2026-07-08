@@ -26,7 +26,7 @@ const reset=()=>{setFile(null);setRows([]);setStats(null);setStep("idle");setErr
 const vis=fil==="meeting"?rows.filter(r=>r.add_to_meeting):fil==="sale"?rows.filter(r=>r.transaction_type==="sale"):fil==="rental"?rows.filter(r=>r.transaction_type==="rental"):rows;
 const fmt=n=>Math.round(n||0).toLocaleString("el-GR");
 
-return(<div style={{padding:"32px 40px",minHeight:"100vh"}}>
+return(<div style={{padding:"32px 40px",minHeight:"100vh",background:"#0d0d0d"}}>
   <div style={{marginBottom:32}}>
     <div style={{fontSize:11,color:"#555",textTransform:"uppercase",letterSpacing:".12em",marginBottom:6}}>iList Import</div>
     <h1 style={{fontSize:24,fontWeight:600,color:"#f0f0f0",margin:0}}>Εισαγωγή ακινήτων</h1>

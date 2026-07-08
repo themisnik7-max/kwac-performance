@@ -236,7 +236,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ padding: '32px 40px', minHeight: '100vh' }}>
+    <div style={{ padding: '32px 40px', minHeight: '100vh', background: '#0d0d0d' }}>
 
       {/* ── Header ── */}
       <div style={{ marginBottom: 28, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
