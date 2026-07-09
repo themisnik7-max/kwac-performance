@@ -108,12 +108,53 @@ function CeoIntelligence() {
   const [chatLoading, setChatLoading] = useState(false)
   const [loading, setLoading] = useState(true)
 
+  // Office GPS — target office GCI reverse-engineered into required weekly
+  // office-wide activity, using real aggregate conversion rates (see
+  // lib/officeMetrics.ts getOfficeConversionRates). Individual GPS's exact
+  // model at office scale, minus the agent-split step (not meaningful for
+  // the office's own cut).
+  const [ogTarget, setOgTarget] = useState(500000)
+  const [ogAvgPrice, setOgAvgPrice] = useState(200000)
+  const [ogCommRate, setOgCommRate] = useState(4)
+  const [ogWeeks, setOgWeeks] = useState(48)
+  const [ogCr1, setOgCr1] = useState(10)
+  const [ogCr2, setOgCr2] = useState(50)
+  const [ogCr3, setOgCr3] = useState(40)
+  const [ogCr4, setOgCr4] = useState(60)
+  const [ogRealRates, setOgRealRates] = useState(null)
+  const [ogSaving, setOgSaving] = useState(false)
+  const [ogToast, setOgToast] = useState('')
+
   useEffect(() => {
     // Same lib/officeMetrics.ts aggregation Monitor's Παραγωγή tab uses — this
     // page shows the macro/office-wide read of it, Monitor has the per-agent
     // operational drill-down.
     authedFetch('/api/monitor/production').then(r => r.json()).then(setProduction).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    authedFetch('/api/gps/office').then(r => r.json()).then(({ goal, realRates }) => {
+      if (goal) {
+        setOgTarget(goal.target_income || 500000); setOgAvgPrice(goal.avg_property_price || 200000)
+        setOgCommRate(goal.commission_rate || 4); setOgWeeks(goal.work_weeks || 48)
+        if (goal.cr_call_appt1) setOgCr1(goal.cr_call_appt1); if (goal.cr_appt1_appt2) setOgCr2(goal.cr_appt1_appt2)
+        if (goal.cr_appt2_listing) setOgCr3(goal.cr_appt2_listing); if (goal.cr_listing_deal) setOgCr4(goal.cr_listing_deal)
+      } else if (realRates) {
+        if (realRates.cr_call_appt1) setOgCr1(realRates.cr_call_appt1); if (realRates.cr_appt1_appt2) setOgCr2(realRates.cr_appt1_appt2)
+        if (realRates.cr_appt2_listing) setOgCr3(realRates.cr_appt2_listing); if (realRates.cr_listing_deal) setOgCr4(realRates.cr_listing_deal)
+      }
+      setOgRealRates(realRates)
+    }).catch(() => {})
+  }, [])
+
+  async function saveOfficeGoal() {
+    setOgSaving(true)
+    await authedFetch('/api/gps/office', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_income: ogTarget, avg_property_price: ogAvgPrice, commission_rate: ogCommRate, work_weeks: ogWeeks, cr_call_appt1: ogCr1, cr_appt1_appt2: ogCr2, cr_appt2_listing: ogCr3, cr_listing_deal: ogCr4 }),
+    })
+    setOgToast('✅ Αποθηκεύτηκε!'); setOgSaving(false); setTimeout(() => setOgToast(''), 2500)
+  }
 
   useEffect(() => {
     authedFetch('/api/intelligence').then(r => r.json()).then(raw => {
@@ -152,7 +193,34 @@ function CeoIntelligence() {
   }
 
   const insightBorder = (type) => type === 'warning' ? '#CC2229' : type === 'opportunity' ? '#3B6D11' : '#378ADD'
-  const TABS = [{ key: 'overview', label: 'Επισκόπηση' }, { key: 'production', label: 'Παραγωγή' }, { key: 'agents', label: 'Μεσίτες' }, { key: 'areas', label: 'Περιοχές' }, { key: 'chat', label: '🤖 AI Ανάλυση' }]
+  const TABS = [{ key: 'overview', label: 'Επισκόπηση' }, { key: 'production', label: 'Παραγωγή' }, { key: 'officegps', label: 'GPS Γραφείου' }, { key: 'agents', label: 'Μεσίτες' }, { key: 'areas', label: 'Περιοχές' }, { key: 'chat', label: '🤖 AI Ανάλυση' }]
+
+  // Office GPS funnel math — identical shape to app/gps/page.tsx's
+  // individual calculator, minus the agent-split step (this is the office's
+  // own GCI target, not one agent's post-split take-home).
+  const ogPerDeal = ogAvgPrice * (ogCommRate / 100)
+  const ogDealsNeeded = Math.ceil(ogTarget / ogPerDeal)
+  const ogListingsNeeded = Math.ceil(ogDealsNeeded / (ogCr4 / 100))
+  const ogAppt2Needed = Math.ceil(ogListingsNeeded / (ogCr3 / 100))
+  const ogAppt1Needed = Math.ceil(ogAppt2Needed / (ogCr2 / 100))
+  const ogCallsNeeded = Math.ceil(ogAppt1Needed / (ogCr1 / 100))
+  const ogCallsW = Math.ceil(ogCallsNeeded / ogWeeks)
+  const ogAppt1W = Math.ceil(ogAppt1Needed / ogWeeks)
+  const ogAppt2W = Math.ceil(ogAppt2Needed / ogWeeks)
+  const ogListW = Math.ceil(ogListingsNeeded / ogWeeks)
+  // Current pace, from real data — avg per agent-week-submitted, the closest
+  // honest proxy to "typical office week" without assuming every agent
+  // submitted every calendar week uniformly.
+  const currentCallsW = production?.officeTotals?.weeks_submitted ? Math.round(production.officeTotals.calls / production.officeTotals.weeks_submitted) : null
+  const ogSlider = (label, val, set, min, max, step, f = null) => (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: '#888' }}>{label}</span>
+        <span style={{ fontSize: 13, fontWeight: 500 }}>{f ? f(val) : val}</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={val} onChange={e => set(Number(e.target.value))} style={{ width: '100%' }} />
+    </div>
+  )
 
   return (
     <div>
@@ -223,6 +291,73 @@ function CeoIntelligence() {
           </div>
         )
       })()}
+
+      {tab === 'officegps' && (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <p style={{ fontSize: 13, color: '#888', margin: 0, maxWidth: 560 }}>Όπως το GPS δίνει σε έναν μεσίτη τις εβδομαδιαίες ενέργειες που χρειάζεται για τον στόχο του, εδώ γίνεται το ίδιο για όλο το γραφείο — με βάση τα πραγματικά conversion rates απ' όλες τις εβδομαδιαίες υποβολές.</p>
+            <button onClick={saveOfficeGoal} disabled={ogSaving} style={{ padding: '8px 16px', background: '#CC2229', color: '#fff', border: 'none', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer', flexShrink: 0 }}>{ogSaving ? '...' : 'Αποθήκευση'}</button>
+          </div>
+          {ogToast && <div style={{ background: '#EAF3DE', color: '#3B6D11', padding: '10px 16px', borderRadius: 8, marginBottom: 16, fontSize: 14 }}>{ogToast}</div>}
+          {ogRealRates && ogRealRates.weeks_of_data < 8 && (
+            <div style={{ background: '#FFF8E6', color: '#BA7517', padding: '10px 16px', borderRadius: 8, marginBottom: 16, fontSize: 13 }}>
+              ⚠️ Τα conversion rates βασίζονται σε μόλις {ogRealRates.weeks_of_data} εβδομαδιαίες υποβολές συνολικά στο γραφείο — ενδεικτικά προς το παρόν, θα σταθεροποιηθούν με περισσότερα δεδομένα.
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 16 }}>
+            <div>
+              <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1.25rem', marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12 }}>Στόχος Γραφείου (GCI/έτος)</div>
+                {ogSlider('Στόχος GCI (€)', ogTarget, setOgTarget, 100000, 3000000, 25000, v => '€' + fmt(v))}
+                {ogSlider('Μέση αξία ακινήτου (€)', ogAvgPrice, setOgAvgPrice, 50000, 1000000, 10000, v => '€' + fmt(v))}
+                {ogSlider('Αμοιβή γραφείου (%)', ogCommRate, setOgCommRate, 1, 6, 0.5, v => v + '%')}
+                {ogSlider('Εβδομάδες/χρόνο', ogWeeks, setOgWeeks, 40, 52, 1)}
+              </div>
+              <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1.25rem' }}>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Conversion rates γραφείου</div>
+                <div style={{ fontSize: 11, color: '#aaa', marginBottom: 12 }}>Προσυμπληρωμένα από τα πραγματικά δεδομένα — προσαρμόσιμα.</div>
+                {ogSlider('Call → 1ο Ραντεβού', ogCr1, setOgCr1, 1, 50, 1, v => v + '%')}
+                {ogSlider('1ο → 2ο Ραντεβού', ogCr2, setOgCr2, 10, 90, 5, v => v + '%')}
+                {ogSlider('2ο Ραντεβού → Ανάθεση', ogCr3, setOgCr3, 10, 90, 5, v => v + '%')}
+                {ogSlider('Ανάθεση → Συμβόλαιο', ogCr4, setOgCr4, 10, 90, 5, v => v + '%')}
+              </div>
+            </div>
+            <div>
+              <div style={{ background: '#1a1a1a', borderRadius: 12, padding: '1.25rem', marginBottom: 12, color: '#fff' }}>
+                <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 12 }}>Στόχος Γραφείου</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                  {[{ l: 'GCI/χρόνο', v: '€' + fmt(ogTarget) }, { l: 'Αμοιβή/συμβόλαιο', v: '€' + fmt(Math.round(ogPerDeal)) }, { l: 'GCI/μήνα', v: '€' + fmt(Math.round(ogTarget / 12)) }].map(m => (
+                    <div key={m.l} style={{ background: 'rgba(255,255,255,.08)', borderRadius: 8, padding: '10px 12px' }}>
+                      <div style={{ fontSize: 11, color: '#888', marginBottom: 3 }}>{m.l}</div>
+                      <div style={{ fontSize: 18, fontWeight: 500 }}>{m.v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1.25rem' }}>
+                <div style={{ fontSize: 13, fontWeight: 500, color: '#888', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '.05em' }}>Εβδομαδιαίος στόχος γραφείου</div>
+                {[{ l: '📞 Calls', v: ogCallsNeeded, w: ogCallsW, c: '#378ADD', current: currentCallsW }, { l: '📅 1ο Ραντεβού', v: ogAppt1Needed, w: ogAppt1W, c: '#BA7517' }, { l: '🤝 2ο Ραντεβού', v: ogAppt2Needed, w: ogAppt2W, c: '#534AB7' }, { l: '📋 Αναθέσεις', v: ogListingsNeeded, w: ogListW, c: '#0F6E56' }].map(m => (
+                  <div key={m.l} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span style={{ fontSize: 13 }}>{m.l}</span>
+                      <span style={{ fontSize: 12, color: '#888' }}>
+                        χρειάζεται {m.w}/εβδ
+                        {m.current != null && <span style={{ marginLeft: 6, color: m.current >= m.w ? '#3B6D11' : '#CC2229', fontWeight: 500 }}>· τώρα ~{m.current}/εβδ</span>}
+                      </span>
+                    </div>
+                    <div style={{ background: '#f0f0f0', borderRadius: 100, height: 8, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', background: m.c, borderRadius: 100, width: '100%' }} />
+                    </div>
+                  </div>
+                ))}
+                <div style={{ marginTop: 12, padding: '10px 12px', background: '#f8f8f7', borderRadius: 8, fontSize: 13, color: '#555' }}>
+                  <strong>Εβδ. στόχος γραφείου:</strong> {ogCallsW} calls → {ogAppt1W} ραντ.1 → {ogAppt2W} ραντ.2 → {ogListW} αναθέσεις, από όλο το γραφείο μαζί
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {tab === 'agents' && (
         <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1.25rem' }}>
           <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 16 }}>Απόδοση ανά Μεσίτη</div>

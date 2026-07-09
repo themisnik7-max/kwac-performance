@@ -42,11 +42,16 @@ export async function GET(req: NextRequest) {
     const totAppt2 = submissions.reduce((s,r) => s + (r.meet2_seller||0), 0)
     const totList  = submissions.reduce((s,r) => s + (r.excl_listing_sale||0) + (r.simple_listing_sale||0) + (r.excl_rental_high||0) + (r.excl_rental_low||0) + (r.simple_rental||0), 0)
     const totDeals = submissions.reduce((s,r) => s + (r.contract_seller||0) + (r.contract_buyer||0), 0)
+    // Clamped to [1,95] — sparse weekly data can produce a stage-to-stage
+    // ratio over 100% (e.g. a mandate logged the same week as a 2nd
+    // appointment from a different, earlier deal); uncapped it both misreads
+    // as a bug and breaks the GPS page's sliders (max 90).
+    const rate = (num: number, den: number) => den > 0 ? Math.max(1, Math.min(95, Math.round((num / den) * 100))) : null
     realRates = {
-      cr_call_appt1: totCalls > 0 ? Math.round((totAppt1/totCalls)*100) : null,
-      cr_appt1_appt2: totAppt1 > 0 ? Math.round((totAppt2/totAppt1)*100) : null,
-      cr_appt2_listing: totAppt2 > 0 ? Math.round((totList/totAppt2)*100) : null,
-      cr_listing_deal: totList > 0 ? Math.round((totDeals/totList)*100) : null,
+      cr_call_appt1: rate(totAppt1, totCalls),
+      cr_appt1_appt2: rate(totAppt2, totAppt1),
+      cr_appt2_listing: rate(totList, totAppt2),
+      cr_listing_deal: rate(totDeals, totList),
       weeks_of_data: submissions.length
     }
   }

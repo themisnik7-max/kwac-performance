@@ -85,6 +85,18 @@ Explicit product direction (2026-07): `ai_admin_actions_log`, `valuation_calibra
 
 Sums, per agent: `calls` (cold_calls), `second_appointments` (meet2_seller), `mandates` (excl/simple listing+rental fields), `offers` (offer_buyer+offer_tenant), `deposits` (deposit_office+deposit_client), `closings` (contract_seller+contract_buyer), `weeks_submitted`, `xp_total` — all from `weekly_submissions`. Plus `demand` (count of `demand_profiles` rows) and `showings` (count of `showings` rows — honestly 0 today, see the dormant-tables note above). `deposit_office`/`deposit_client` existed on `weekly_submissions` but had no input fields on `/submit` until now — added them (with matching XP weights in both `app/submit/page.jsx` and `app/api/submit/route.js`, which the file comments already flag as needing manual sync).
 
+`lib/officeMetrics.ts` also exports `getOfficeConversionRates(sb, agencyId)` — the office-wide analog of `/api/gps`'s per-agent "realRates" (same call→appt1→appt2→listing→deal field mapping, summed across every agent instead of one), backing "GPS Γραφείου" (below). Both this and the individual GPS route clamp computed rates to **[1,95]** — sparse per-week data can produce a stage ratio over 100% (e.g. a mandate logged the same week as an unrelated earlier deal's 2nd appointment), which would both misread as a bug and break the sliders (max 90).
+
+## GPS — individual and office-wide
+
+`app/gps/page.tsx` (`/api/gps`) reverse-engineers **one agent's** target income into a required weekly funnel (calls → 1st appt → 2nd appt → mandate → deal), using either manual conversion-rate sliders or that agent's own real rates. **`office_gps_goals`** (migration 042) + `/api/gps/office` + the "GPS Γραφείου" tab in `CeoIntelligence` (`app/intelligence/page.tsx`) do the identical calculation for the **whole office** — target GCI instead of one agent's take-home (no agent-split step, since there's no individual commission split at office scale), using `getOfficeConversionRates` instead of one agent's history. The office tab also shows current real weekly pace (`officeTotals.calls / officeTotals.weeks_submitted`, from Monitor/Intelligence OP's own production data) next to each "needed per week" number, so it reads as a gap-to-close, not just a target.
+
+## Sprint Calls — folded into Μετρησιμότητα, surfaced on Dashboard
+
+`app/sprint/page.tsx`'s live-session call counters (`calls`/`leads`/`appointments` on `sprint_entries`) used to be a fully separate counter system with no connection to `weekly_submissions`. `app/api/sprint/entry/route.ts` now does both in one call: upserts `sprint_entries` (unchanged, for the live leaderboard) **and** folds the delta into the agent's current-week `weekly_submissions` row via a fixed mapping — `calls`→`cold_calls`, `leads`→`leads_cold`, `appointments`→`meet1_seller_phone` (a sprint is cold-calling, so its "appointment" is specifically a phone-set 1st appointment) — with matching XP weights, so sprint activity earns the same XP a manual `/submit` entry would. `lib/weekInfo.ts`'s `getWeekInfo()` (extracted from `app/submit/page.jsx`, which used to have its own inline copy) is what decides which week a sprint call lands in.
+
+`app/dashboard/page.tsx` now also surfaces the latest sprint session's top-5 leaderboard and the 4 most recent `announcements` rows — same data `/sprint` and `/board` show, respectively, just visible without navigating away.
+
 ## Auth/permissions patterns
 
 - `getAuthedAgent(req)` — resolves the caller's agent row from their bearer token. Every service-role route needs this.
@@ -103,6 +115,7 @@ Sums, per agent: `calls` (cold_calls), `second_appointments` (meet2_seller), `ma
 - Registry import: `lib/mamaRegistry.ts` + `app/api/market-data/import-registry`.
 - Open House brochure → scheduled event + announcement: `components/MarketingKitPanel.tsx`'s `handleOpenHouse()` calls `/api/marketing/open-house-announce`.
 - Cross-agent activity aggregation: `lib/officeMetrics.ts`, served by `/api/monitor/production`, consumed by both `app/monitor/page.tsx` and `app/intelligence/page.tsx`.
+- Shared ISO week calc: `lib/weekInfo.ts` (used by `/submit` and `/api/sprint/entry` so they agree on "which week is this").
 
 ## ⚠️ This environment's TypeScript install doesn't narrow discriminated unions
 

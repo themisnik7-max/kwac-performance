@@ -187,6 +187,11 @@ export default function Dashboard() {
   const [news, setNews]                 = useState<any[]>([])
   const [newsLoading, setNewsLoading]   = useState(true)
   const [toast, setToast]               = useState('')
+  const [sprint, setSprint]             = useState<any>(null)
+  const [sprintBoard, setSprintBoard]   = useState<any[]>([])
+  const [sprintLoading, setSprintLoading] = useState(true)
+  const [announcements, setAnnouncements] = useState<any[]>([])
+  const [annLoading, setAnnLoading]     = useState(true)
 
   const now     = new Date()
   const hour    = now.getHours()
@@ -228,6 +233,29 @@ export default function Dashboard() {
       .then(r => r.json())
       .then(d => { setNews(d.articles || []); setNewsLoading(false) })
       .catch(() => setNewsLoading(false))
+  }, [])
+
+  // Latest sprint session's live leaderboard — same data /sprint shows,
+  // surfaced here so results are visible without leaving the dashboard.
+  useEffect(() => {
+    supabase.from('sprint_sessions').select('*').order('date', { ascending: false }).limit(1)
+      .then(({ data }) => {
+        const latest = data?.[0] || null
+        setSprint(latest)
+        if (!latest) { setSprintLoading(false); return }
+        supabase.from('sprint_entries').select('*, agents(full_name)').eq('sprint_id', latest.id)
+          .then(({ data: entries }) => {
+            const sorted = (entries || []).sort((a, b) => ((b.calls || 0) + (b.leads || 0) + (b.appointments || 0)) - ((a.calls || 0) + (a.leads || 0) + (a.appointments || 0)))
+            setSprintBoard(sorted.slice(0, 5))
+            setSprintLoading(false)
+          }, () => setSprintLoading(false))
+      }, () => setSprintLoading(false))
+  }, [])
+
+  // Recent announcements — same data /board's Ανακοινώσεις tab shows.
+  useEffect(() => {
+    supabase.from('announcements').select('*, agents(full_name)').order('created_at', { ascending: false }).limit(4)
+      .then(({ data }) => { setAnnouncements(data || []); setAnnLoading(false) }, () => setAnnLoading(false))
   }, [])
 
   function showToast(msg: string) {
@@ -372,6 +400,51 @@ export default function Dashboard() {
               </a>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* ── Sprint results + Announcements ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+        <div style={{ background: '#111', border: '1px solid #1e1e1e', borderRadius: 12, padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ fontSize: 11, color: '#555', textTransform: 'uppercase', letterSpacing: '.1em' }}>
+              🔥 Sprint Calls {sprint ? `— ${sprint.label}` : ''}
+            </div>
+            <a href="/sprint" style={{ fontSize: 11, color: '#555', textDecoration: 'none' }}>Όλα →</a>
+          </div>
+          {sprintLoading ? (
+            <div style={{ color: '#444', fontSize: 13 }}>Φόρτωση...</div>
+          ) : !sprint ? (
+            <div style={{ color: '#444', fontSize: 13, textAlign: 'center', padding: '1rem 0' }}>Κανένα sprint ακόμα.</div>
+          ) : sprintBoard.length === 0 ? (
+            <div style={{ color: '#444', fontSize: 13, textAlign: 'center', padding: '1rem 0' }}>Κανείς δεν έχει καταχωρήσει ακόμα.</div>
+          ) : sprintBoard.map((e, i) => (
+            <div key={e.agent_id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: i < sprintBoard.length - 1 ? '1px solid #1a1a1a' : 'none' }}>
+              <span style={{ fontSize: 14, minWidth: 20, textAlign: 'center' }}>{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '#' + (i + 1)}</span>
+              <span style={{ flex: 1, fontSize: 13, color: '#f0f0f0' }}>{e.agents?.full_name || 'Agent'}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: RED }}>{(e.calls || 0) + (e.leads || 0) + (e.appointments || 0)}</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background: '#111', border: '1px solid #1e1e1e', borderRadius: 12, padding: '20px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ fontSize: 11, color: '#555', textTransform: 'uppercase', letterSpacing: '.1em' }}>📣 Ανακοινώσεις</div>
+            <a href="/board" style={{ fontSize: 11, color: '#555', textDecoration: 'none' }}>Όλα →</a>
+          </div>
+          {annLoading ? (
+            <div style={{ color: '#444', fontSize: 13 }}>Φόρτωση...</div>
+          ) : announcements.length === 0 ? (
+            <div style={{ color: '#444', fontSize: 13, textAlign: 'center', padding: '1rem 0' }}>Καμία ανακοίνωση ακόμα.</div>
+          ) : announcements.map((a, i) => (
+            <div key={a.id} style={{ padding: '7px 0', borderBottom: i < announcements.length - 1 ? '1px solid #1a1a1a' : 'none' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontSize: 13, color: '#f0f0f0', fontWeight: 500 }}>{a.title || 'Ανακοίνωση'}</span>
+                <span style={{ fontSize: 10, color: '#444', flexShrink: 0 }}>{relativeDate(a.created_at)}</span>
+              </div>
+              {a.content && <div style={{ fontSize: 12, color: '#666', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.content}</div>}
+            </div>
+          ))}
         </div>
       </div>
 

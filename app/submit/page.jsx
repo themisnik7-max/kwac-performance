@@ -2,6 +2,7 @@
 import { useState, useEffect } from "react";
 import { useApp } from "@/lib/AppContext";
 import { authedFetch } from "@/lib/authedFetch";
+import { getWeekInfo } from "@/lib/weekInfo";
 
 const RED = "#CC2229";
 
@@ -65,15 +66,6 @@ const SECTIONS = [
 ];
 
 const XP_MAP = {cold_calls:1,follow_up:1,leads_cold:3,leads_cultivation:3,leads_mail:3,leads_social:3,leads_database:3,meet1_seller_live:15,meet1_seller_phone:10,meet2_seller:25,meet1_buyer_live:15,meet1_buyer_phone:10,meet1_tenant_live:10,meet1_tenant_phone:7,excl_listing_sale:80,simple_listing_sale:40,excl_rental_high:60,excl_rental_low:40,simple_rental:20,contract_seller:150,contract_buyer:150,collab_internal:30,collab_external:30,offer_buyer:10,offer_tenant:10,deposit_office:15,deposit_client:15,photo_professional:5,open_house:20,matterport:15,new_partner:25,referral_sent:10,referral_received:10,training_meeting:5,admin_1on1:5};
-
-function getWeekInfo(d) {
-  const date = new Date(d.getTime());
-  date.setHours(0, 0, 0, 0);
-  date.setDate(date.getDate() + 3 - ((date.getDay() + 6) % 7));
-  const week1 = new Date(date.getFullYear(), 0, 4);
-  const week = 1 + Math.round(((date - week1) / 86400000 - 3 + ((week1.getDay() + 6) % 7)) / 7);
-  return { week, year: date.getFullYear() };
-}
 
 function Counter({ value, onChange, disabled }) {
   return (

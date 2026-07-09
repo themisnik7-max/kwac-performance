@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import Shell from '@/components/Shell'
 import { useApp } from '@/lib/AppContext'
 import { createClient } from '@/lib/supabase'
+import { authedFetch } from '@/lib/authedFetch'
 
 export default function SprintPage() {
   const { agent, role } = useApp()
@@ -35,17 +36,18 @@ export default function SprintPage() {
     setEntries(map)
   }
 
+  // Goes through the server, not a direct client upsert — this is also what
+  // folds sprint activity into the agent's current-week weekly_submissions
+  // row (see app/api/sprint/entry/route.ts), so sprint calls count toward
+  // Μετρησιμότητα instead of living in a totally separate counter.
   async function saveEntry(field: string, value: number) {
     if (!agent || !active) return
     setSaving(true)
-    const existing = entries[agent.id]
-    const payload = {
-      sprint_id: active.id, agent_id: agent.id,
-      calls: existing?.calls || 0, leads: existing?.leads || 0, appointments: existing?.appointments || 0,
-      [field]: value, updated_at: new Date().toISOString()
-    }
-    await supabase.from('sprint_entries').upsert(payload, { onConflict: 'sprint_id,agent_id' })
-    setEntries(prev => ({ ...prev, [agent.id]: { ...prev[agent.id], [field]: value } }))
+    const res = await authedFetch('/api/sprint/entry', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sprint_id: active.id, field, value }),
+    })
+    if (res.ok) setEntries(prev => ({ ...prev, [agent.id]: { ...prev[agent.id], [field]: value } }))
     setSaving(false)
   }
 
@@ -66,7 +68,7 @@ export default function SprintPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', margin: 0 }}>Sprint Calls</h1>
-            <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>3 sprints / εβδομαδα - live leaderboard</p>
+            <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>3 sprints / εβδομαδα - live leaderboard - μετράει αυτόματα στη Μετρησιμότητα της εβδομάδας</p>
           </div>
           {isCeo && (
             <div style={{ display: 'flex', gap: 8 }}>

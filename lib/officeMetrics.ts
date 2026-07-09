@@ -100,3 +100,45 @@ export async function getOfficeActivityMetrics(sb: SupabaseClient, agencyId: str
 
   return { agents, teams, solo, officeTotals }
 }
+
+export type OfficeConversionRates = {
+  cr_call_appt1: number | null; cr_appt1_appt2: number | null
+  cr_appt2_listing: number | null; cr_listing_deal: number | null
+  weeks_of_data: number
+}
+
+// Office-wide analog of app/api/gps/route.ts's per-agent "realRates" —
+// same field mapping, summed across every agent in the agency instead of
+// one. Backs the "GPS Γραφείου" tab in Intelligence OP: the individual GPS
+// funnel reverse-engineers one agent's target into weekly actions from
+// their own real conversion rates; this does the same at office scale.
+export async function getOfficeConversionRates(sb: SupabaseClient, agencyId: string): Promise<OfficeConversionRates> {
+  const { data: submissions } = await sb
+    .from('weekly_submissions')
+    .select('cold_calls, follow_up, meet1_seller_live, meet1_seller_phone, meet1_buyer_live, meet1_buyer_phone, meet1_tenant_live, meet1_tenant_phone, meet2_seller, excl_listing_sale, simple_listing_sale, excl_rental_high, excl_rental_low, simple_rental, contract_seller, contract_buyer')
+    .eq('agency_id', agencyId)
+
+  const rows = submissions || []
+  if (rows.length === 0) return { cr_call_appt1: null, cr_appt1_appt2: null, cr_appt2_listing: null, cr_listing_deal: null, weeks_of_data: 0 }
+
+  const totCalls = rows.reduce((s, r) => s + (r.cold_calls || 0) + (r.follow_up || 0), 0)
+  const totAppt1 = rows.reduce((s, r) => s + (r.meet1_seller_live || 0) + (r.meet1_seller_phone || 0) + (r.meet1_buyer_live || 0) + (r.meet1_buyer_phone || 0) + (r.meet1_tenant_live || 0) + (r.meet1_tenant_phone || 0), 0)
+  const totAppt2 = rows.reduce((s, r) => s + (r.meet2_seller || 0), 0)
+  const totList  = rows.reduce((s, r) => s + (r.excl_listing_sale || 0) + (r.simple_listing_sale || 0) + (r.excl_rental_high || 0) + (r.excl_rental_low || 0) + (r.simple_rental || 0), 0)
+  const totDeals = rows.reduce((s, r) => s + (r.contract_seller || 0) + (r.contract_buyer || 0), 0)
+
+  // Clamped to [1,95] — a real funnel stage can't convert above ~100%, but
+  // aggregating many agents' independently-timed weekly counters can produce
+  // a ratio over 100 in practice (e.g. a mandate logged in a week with no
+  // matching 2nd-appointment counted that same week). Uncapped, that would
+  // both misread as a bug and break the office GPS slider (max 90).
+  const rate = (num: number, den: number) => den > 0 ? Math.max(1, Math.min(95, Math.round((num / den) * 100))) : null
+
+  return {
+    cr_call_appt1: rate(totAppt1, totCalls),
+    cr_appt1_appt2: rate(totAppt2, totAppt1),
+    cr_appt2_listing: rate(totList, totAppt2),
+    cr_listing_deal: rate(totDeals, totList),
+    weeks_of_data: rows.length,
+  }
+}
