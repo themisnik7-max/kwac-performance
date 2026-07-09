@@ -20,7 +20,7 @@ function KPICard({label,value,sub=null,color=null}){return(<div style={{backgrou
 
 export default function MonitorPage() {
   const { role } = useApp()
-  const isCeo = role==='ceo'||role==='admin'
+  const isCeo = role==='ceo'
   const [agents,setAgents]=useState([])
   const [topRoutes,setTopRoutes]=useState([])
   const [kpis,setKpis]=useState(null)

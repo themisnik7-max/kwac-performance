@@ -329,7 +329,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 6. Notify agents (demand agent + any property agent that differs)
-  const propertyAgentIds = [...new Set(matchedProps.map(p => p.agent_id).filter(id => id !== d.agent_id))]
+  const propertyAgentIds = Array.from(new Set(matchedProps.map(p => p.agent_id).filter(id => id !== d.agent_id)))
   const allAgentIds = [d.agent_id, ...propertyAgentIds]
 
   const notifRows = allAgentIds.map(agentId => ({

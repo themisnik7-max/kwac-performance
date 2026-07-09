@@ -223,8 +223,7 @@ export default function Dashboard() {
       .then(({ data }) => {
         setMyProps(data || [])
         setPropsLoading(false)
-      })
-      .catch(() => setPropsLoading(false))
+      }, () => setPropsLoading(false))
   }, [agent, agentLoading])
 
   // Market news

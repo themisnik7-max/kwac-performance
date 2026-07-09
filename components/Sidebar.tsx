@@ -25,7 +25,7 @@ const CEO_LINKS = [
 export default function Sidebar() {
   const path = usePathname();
   const { role } = useApp();
-  const isCeo = role === "ceo" || role === "admin";
+  const isCeo = role === "ceo";
   const links = isCeo ? [...AGENT_LINKS, ...CEO_LINKS] : AGENT_LINKS;
 
   return (

@@ -40,7 +40,7 @@ export async function GET() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const xml = await res.text()
 
-      const rawItems = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, 6)
+      const rawItems = Array.from(xml.matchAll(/<item>([\s\S]*?)<\/item>/g)).slice(0, 6)
       return rawItems.map((m) => ({
         title:   extractText(m[1], 'title'),
         link:    extractLink(m[1]),

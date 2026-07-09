@@ -406,7 +406,7 @@ function CeoIntelligence() {
 
 export default function IntelligencePage() {
   const { role } = useApp()
-  const isCeo = role === 'ceo' || role === 'admin'
+  const isCeo = role === 'ceo'
   return (
     <Shell>
       <div style={{ padding: '2rem', maxWidth: 1100 }}>

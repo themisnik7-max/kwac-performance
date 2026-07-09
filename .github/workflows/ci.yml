@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      # Build-time placeholders only — no real credentials. Module-scope
+      # `createClient(...)` calls (see lib/supabase.ts and several
+      # app/api/**/route.ts files) throw at import time if these are empty,
+      # which would fail `next build` even though nothing here talks to a
+      # real database. Add real, non-production secrets via repo Actions
+      # secrets if preview deploys against a real Supabase project are ever
+      # wanted here.
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: repo/package-lock.json
+
+      - name: Install dependencies
+        working-directory: repo
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: repo
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: repo
+        run: npm run test
+
+      - name: Build
+        working-directory: repo
+        run: npm run build
