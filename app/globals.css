@@ -18,3 +18,12 @@ body{background:#f5f5f5;color:#1a1a1a;color-scheme:light;}
 a{text-decoration:none;color:inherit;}
 button{font-family:inherit;cursor:pointer;}
 input,select,textarea{font-family:inherit;font-size:13px;outline:none;box-sizing:border-box;}
+
+/* AppShell renders Sidebar/PageTracker/AiAdminChat on every route except
+   /login (see components/AppShell.tsx) — without this, printing any
+   print-ready page (brochure, open-house, GPI agreement, ...) bleeds the
+   office chrome into the printed/PDF output. */
+@media print {
+  .app-chrome { display: none !important; }
+  main { margin-left: 0 !important; }
+}

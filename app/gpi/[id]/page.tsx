@@ -33,10 +33,12 @@ type Client = {
 type Unit = {
   id: string; sqm: number | null; floor: string | null; project: string | null; address: string | null
   unit_name: string | null; expected_rent: number | null; brochure_sent: boolean; exclusive_agreement_sent: boolean
-  exclusive_agreement_date: string | null; rented: boolean; energy_certificate: boolean; advertisement: boolean
+  exclusive_agreement_date: string | null; exclusive_agreement_duration_months: number | null
+  rented: boolean; energy_certificate: boolean; advertisement: boolean
   ad_link: string | null; project_delivered: boolean; keys_received: boolean
+  description: string | null; notices: string | null
 }
-const EMPTY_UNIT: Partial<Unit> = { sqm: null, floor: '', project: '', address: '', unit_name: '', expected_rent: null, ad_link: '', exclusive_agreement_date: '' }
+const EMPTY_UNIT: Partial<Unit> = { sqm: null, floor: '', project: '', address: '', unit_name: '', expected_rent: null, ad_link: '', exclusive_agreement_date: '', exclusive_agreement_duration_months: null, description: '', notices: '' }
 
 export default function GpiClientPage({ params }: { params: { id: string } }) {
   const id = params.id
@@ -240,7 +242,10 @@ function UnitCard({ unit, onUpdate, onDelete }: { unit: Unit; onUpdate: (p: Part
     <div style={{ border: '1px solid ' + C.border, borderRadius: 10, padding: 14, marginBottom: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
         <strong style={{ fontSize: 13 }}>{unit.unit_name || unit.project || 'Μονάδα'}</strong>
-        <button onClick={onDelete} style={{ background: 'transparent', border: 'none', color: C.muted, fontSize: 11, cursor: 'pointer' }}>Διαγραφή</button>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'baseline' }}>
+          <a href={`/gpi/agreement/${unit.id}`} target="_blank" rel="noreferrer" style={{ color: C.blue, fontSize: 11, fontWeight: 600, textDecoration: 'none' }}>📄 Συμφωνητικό Αποκλειστικότητας</a>
+          <button onClick={onDelete} style={{ background: 'transparent', border: 'none', color: C.muted, fontSize: 11, cursor: 'pointer' }}>Διαγραφή</button>
+        </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0 }}>
         <Field label="Project" value={draft.project} onChange={dset('project')} />
@@ -250,8 +255,11 @@ function UnitCard({ unit, onUpdate, onDelete }: { unit: Unit; onUpdate: (p: Part
         <Field label="Τ.μ." type="number" value={draft.sqm} onChange={(v: string) => dset('sqm')(v ? Number(v) : null)} />
         <Field label="Αναμενόμενο Ενοίκιο" type="number" value={draft.expected_rent} onChange={(v: string) => dset('expected_rent')(v ? Number(v) : null)} />
         <Field label="Ημ/νία Αποκλειστικής Ανάθεσης" type="date" value={draft.exclusive_agreement_date} onChange={dset('exclusive_agreement_date')} />
+        <Field label="Διάρκεια Αποκλειστικότητας (μήνες)" type="number" value={draft.exclusive_agreement_duration_months} onChange={(v: string) => dset('exclusive_agreement_duration_months')(v ? Number(v) : null)} />
         <Field label="Ad Link" value={draft.ad_link} onChange={dset('ad_link')} />
       </div>
+      <Field label="Περιγραφή (για το συμφωνητικό)" value={draft.description} onChange={dset('description')} />
+      <Field label="Σημειώσεις (για το συμφωνητικό)" value={draft.notices} onChange={dset('notices')} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12 }}>
         <Check label="Brochure Sent" checked={draft.brochure_sent} onChange={dset('brochure_sent')} />
         <Check label="Exclusive Agreement Sent" checked={draft.exclusive_agreement_sent} onChange={dset('exclusive_agreement_sent')} />

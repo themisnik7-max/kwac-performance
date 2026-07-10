@@ -1,6 +1,7 @@
 // Shared helpers for the GPI (long-term rental / property-management
 // client) feature — app/api/gpi/**, app/gpi/**. Kept separate from the
 // sales/valuation domain on purpose (see supabase/migrations/044_gpi.sql).
+import crypto from 'crypto'
 import { encryptSecret, decryptSecret } from './crypto'
 import { isCeoOrAdmin, type AuthedAgent } from './auth'
 
@@ -63,3 +64,57 @@ export function canAccessGpiClient(caller: AuthedAgent, client: { agency_id: str
   if (client.agency_id !== caller.agency_id) return false
   return isCeoOrAdmin(caller) || client.agent_id === caller.id
 }
+
+export type GpiUnitRow = {
+  id: string
+  agency_id: string
+  client_id: string
+  expected_rent: number | null
+  address: string | null
+  project: string | null
+  unit_name: string | null
+  description: string | null
+  notices: string | null
+  exclusive_agreement_date: string | null
+  exclusive_agreement_duration_months: number | null
+}
+
+// Shape consumed by components/GpiAgreementDocument.tsx — built once here so
+// the agent's authenticated preview route and the public token-based route
+// can't drift into filling the document differently.
+export function buildAgreementData(client: GpiClientRow, unit: GpiUnitRow, agentFullName: string | null) {
+  return {
+    full_name: client.full_name,
+    father_name: client.father_name,
+    address: client.address,
+    tin_number: client.tin_number,
+    id_passport_number: client.id_passport_number,
+    agent_full_name: agentFullName,
+    unit: {
+      expected_rent: unit.expected_rent,
+      address: unit.address,
+      project: unit.project,
+      unit_name: unit.unit_name,
+      description: unit.description,
+      notices: unit.notices,
+      exclusive_agreement_date: unit.exclusive_agreement_date,
+      exclusive_agreement_duration_months: unit.exclusive_agreement_duration_months,
+    },
+  }
+}
+
+// 32 random bytes, base64url — used as the magic-link token in
+// gpi_agreement_shares. Not a JWT and not guessable from the client/unit ids.
+export function generateShareToken(): string {
+  return crypto.randomBytes(32).toString('base64url')
+}
+
+// Lives here rather than in app/api/gpi/units/route.ts because Next.js's
+// generated route types reject a route.ts file exporting anything besides
+// the recognized handler names (GET/POST/etc.) and route config.
+export const GPI_UNIT_FIELDS = [
+  'sqm', 'floor', 'project', 'address', 'unit_name', 'expected_rent',
+  'brochure_sent', 'exclusive_agreement_sent', 'exclusive_agreement_date', 'exclusive_agreement_duration_months',
+  'rented', 'energy_certificate', 'advertisement', 'ad_link', 'project_delivered', 'keys_received',
+  'description', 'notices',
+] as const
