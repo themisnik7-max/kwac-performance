@@ -14,6 +14,7 @@ const AGENT_LINKS = [
   { href: "/sprint",       icon: "▶", label: "Sprint Calls" },
   { href: "/board",        icon: "◈", label: "Ανακοινώσεις" },
   { href: "/gps",            icon: "◉", label: "GPS Goals" },
+  { href: "/gpi",            icon: "🔑", label: "GPI" },
   { href: "/personal-admin", icon: "🎙", label: "Personal Admin" },
   { href: "/export",         icon: "↓", label: "Export" },
 ];

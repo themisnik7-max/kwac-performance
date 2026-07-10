@@ -117,6 +117,17 @@ Sums, per agent: `calls` (cold_calls), `second_appointments` (meet2_seller), `ma
 - Cross-agent activity aggregation: `lib/officeMetrics.ts`, served by `/api/monitor/production`, consumed by both `app/monitor/page.tsx` and `app/intelligence/page.tsx`.
 - Shared ISO week calc: `lib/weekInfo.ts` (used by `/submit` and `/api/sprint/entry` so they agree on "which week is this").
 
+## GPI — long-term rental / property-management client tracking
+
+New domain (migration 044), deliberately not linked to the sales/valuation tables above — a landlord's ID, TIN, taxisnet credentials, and the unit(s) they have in the program. Lives in the same Supabase project as everything else (not a separate database), but access is intentionally tighter than the rest of the app:
+
+- **`gpi_clients`** (the owner/landlord) — **`gpi_units`** (a specific property/lease of theirs, `client_id` FK) are separate tables because one owner can have multiple units; keeping them separate avoids duplicating a landlord's TIN/ID/taxisnet fields per unit. `gpi_units.agent_id`/`agency_id` are denormalized from the client at insert time so RLS doesn't need a join.
+- **Access is restricted to the assigned agent + admin/ceo only** — not agency-wide like properties/contacts. Same RLS shape as `weekly_submissions`/`sprint_entries`/`gps_goals` (`agent_id = current_agent_id() or is_ceo_or_admin()`).
+- **Taxisnet username/password/authentication key are encrypted application-side** (`lib/crypto.ts`, AES-256-GCM, key from `GPI_ENCRYPTION_KEY` env var — not in the repo, must be set in `.env.local` and Vercel) before they reach Postgres. `lib/gpi.ts`'s `redactGpiClient()` strips the ciphertext entirely from every list/detail API response — the browser never receives it, encrypted or not. Plaintext only ever leaves the server via `POST /api/gpi/clients/[id]/reveal`, which re-checks access and logs every call to `gpi_credential_access_log` (who, which client, when — admin/ceo readable, nothing reads it in the UI yet).
+- ID/passport photo goes to the private `gpi-documents` storage bucket, scoped by the object path's first segment (`agency_id`) in `storage.objects` RLS. `gpi_clients.id_passport_photo_path` stores the storage **path**, not a URL — signed URLs (1hr TTL) are generated fresh on every `GET /api/gpi/clients/[id]`, never persisted, so they can't silently expire in the DB.
+- All reads/writes go through `app/api/gpi/**` (service-role client + `getAuthedAgent` + `lib/gpi.ts`'s `canAccessGpiClient()`), the same pattern as the rest of the API surface — RLS on `gpi_clients`/`gpi_units` is defense-in-depth, not the primary access path.
+- UI: `app/gpi/page.tsx` (list) + `app/gpi/[id]/page.tsx` (client detail, units, credential reveal, photo upload). No AI surface here — plain CRUD, matching PRODUCT_SPEC.md's rule that deterministic data entry doesn't get a skill/LLM call.
+
 ## ⚠️ This environment's TypeScript install doesn't narrow discriminated unions
 
 Confirmed via isolated repro (not project-specific): `if (result.success) {...} else { result.error }` on a `{success:true;...} | {success:false;error:string}` union fails to narrow — `tsc` reports `error` doesn't exist even inside the `else`/negated branch, on a bare minimal file with no project config involved. Root cause not chased down (TS 5.9.3, otherwise-standard setup). **Workaround: use `'error' in result` (`in`-operator narrowing) instead of checking a boolean discriminant field** — confirmed working. See `lib/pricingEngine.ts`'s `ValuationResult` type and its two call sites for the pattern.
