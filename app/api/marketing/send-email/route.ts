@@ -15,11 +15,14 @@
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedAgent, canActAs } from '@/lib/auth'
+import { checkRateLimit } from '@/lib/rateLimit'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+const BREVO_TIMEOUT_MS = 15_000
 
 // ── Price formatter ───────────────────────────────────────
 function formatPrice(v: unknown): string {
@@ -159,15 +162,22 @@ export async function POST(req: NextRequest) {
   const caller = await getAuthedAgent(req)
   if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
-  // 2. Parse body — accepts prop data + agent_id
+  // 2. Parse body — property_id + agent_id only. The property itself is
+  // always fetched server-side, scoped to the caller's own agency, below —
+  // never trust a client-supplied `prop` object for content going out
+  // through the agency's real Brevo sender (unlike this route's siblings,
+  // newsletter/sms, this one used to take the whole property object
+  // straight from the request body).
   const body = await req.json()
-  const { prop, agent_id } = body as { prop: Record<string, unknown>; agent_id: string }
+  const { property_id, agent_id } = body as { property_id: string; agent_id: string }
+  if (!property_id) return NextResponse.json({ error: 'property_id required' }, { status: 400 })
 
   if (!(await canActAs(caller, agent_id))) {
     return NextResponse.json({ error: 'Δεν μπορείς να στείλεις marketing για άλλον μεσίτη' }, { status: 403 })
   }
 
-  // 3. Fetch agent details for personalisation
+  // 3. Fetch agent + property details for personalisation — both scoped to
+  // the caller's own agency, never trusted from the client.
   const { data: agent } = await supabase
     .from('agents')
     .select('id,email,full_name,phone,agency_id')
@@ -176,6 +186,17 @@ export async function POST(req: NextRequest) {
     .single()
 
   if (!agent) return NextResponse.json({ error: 'Agent not found' }, { status: 404 })
+
+  const { data: propRow } = await supabase
+    .from('properties')
+    .select('id, address, area, city, property_type, sqm, floor, bedrooms, year_built, price_asking, ilist_id')
+    .eq('id', property_id)
+    .eq('agency_id', caller.agency_id)
+    .single()
+
+  if (!propRow) return NextResponse.json({ error: 'Property not found' }, { status: 404 })
+
+  const prop: Record<string, unknown> = { ...propRow, ilist_code: propRow.ilist_id }
 
   // 4. Build HTML
   const htmlContent = buildNewsletterHTML(prop, agent)
@@ -201,6 +222,12 @@ export async function POST(req: NextRequest) {
     })
   }
 
+  // Lower risk than newsletter/sms (this only ever creates a draft, never
+  // sends), but still worth guarding against a double-click creating two
+  // duplicate drafts in Brevo.
+  const withinRate = await checkRateLimit(supabase, `send-email-draft:${agent_id}`, 30, 1)
+  if (!withinRate) return NextResponse.json({ error: 'Δημιουργήθηκε ήδη — περίμενε λίγο.' }, { status: 429 })
+
   // 6. Create Brevo campaign draft
   const campaignName = `${prop.address || 'Ακίνητο'} — ${new Date().toLocaleDateString('el-GR')}`
   const subject = `Νέο ακίνητο: ${prop.property_type || 'Ακίνητο'} στο ${prop.area || ''} | KW Athens Center`
@@ -215,15 +242,22 @@ export async function POST(req: NextRequest) {
     // No scheduledAt → stays as draft for agent to review
   }
 
-  const brevoRes = await fetch('https://api.brevo.com/v3/emailCampaigns', {
-    method: 'POST',
-    headers: {
-      'api-key': BREVO_API_KEY,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify(brevoPayload),
-  })
+  let brevoRes: Response
+  try {
+    brevoRes = await fetch('https://api.brevo.com/v3/emailCampaigns', {
+      method: 'POST',
+      headers: {
+        'api-key': BREVO_API_KEY,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(brevoPayload),
+      signal: AbortSignal.timeout(BREVO_TIMEOUT_MS),
+    })
+  } catch (e: any) {
+    console.error('[marketing/send-email] Brevo request failed:', e)
+    return NextResponse.json({ error: e.name === 'TimeoutError' ? 'Brevo timeout' : e.message }, { status: 502 })
+  }
 
   if (!brevoRes.ok) {
     const err = await brevoRes.json()

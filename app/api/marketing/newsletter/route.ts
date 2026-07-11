@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthedAgent, canActAs } from '@/lib/auth'
+import { checkRateLimit } from '@/lib/rateLimit'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+// Vercel Hobby max — sends sequentially, one Brevo call per consented
+// contact; a large contact list could plausibly exceed the platform's
+// unconfigured default duration.
+export const maxDuration = 60
+
+const BREVO_TIMEOUT_MS = 15_000
 
 function formatPrice(v: unknown): string {
   const n = Number(v)
@@ -104,10 +112,24 @@ export async function POST(req: NextRequest) {
     })
   }
 
+  // Guards against a double-click or a client retry after an apparent
+  // timeout re-sending this exact blast to every consented contact again —
+  // no idempotency key existed here before (confirmed during the 2026-07-11
+  // audit: Brevo calls throughout this app had no timeout and no dedup on
+  // retry). A short per-agent cooldown on the *confirmed send* step is a
+  // pragmatic fix reusing the rate-limit primitive rather than a full
+  // client-supplied idempotency key.
+  const withinRate = await checkRateLimit(sb, `newsletter-send:${agent_id}`, 30, 1)
+  if (!withinRate) return NextResponse.json({ error: 'Ήδη στάλθηκε — περίμενε λίγο πριν ξαναστείλεις.' }, { status: 429 })
+
+  // status starts 'sending', not 'sent' — only flipped to a final status
+  // once the loop below actually finishes (see migration
+  // 20260711170000). A mid-loop timeout now leaves this honestly stuck at
+  // 'sending' instead of falsely claiming success.
   const { data: campaign } = await sb.from('marketing_campaigns').insert({
     agency_id: caller.agency_id, agent_id, channel: 'email',
     property_ids: props.map(p => p.id), subject: campaignSubject,
-    content: campaignSubject, status: 'sent', sent_at: new Date().toISOString(),
+    content: campaignSubject, status: 'sending',
   }).select('id').single()
   if (!campaign) return NextResponse.json({ error: 'Failed to create campaign' }, { status: 500 })
 
@@ -132,14 +154,21 @@ export async function POST(req: NextRequest) {
 
     if (!BREVO_API_KEY) { errors.push(`${r.email}: BREVO_API_KEY not configured`); continue }
 
-    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: { 'api-key': BREVO_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
-        to: [{ email: r.email }], subject: campaignSubject, htmlContent, tags: ['newsletter-campaign'],
-      }),
-    })
+    let res: Response
+    try {
+      res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: { 'api-key': BREVO_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sender: { name: BREVO_SENDER_NAME, email: BREVO_SENDER_EMAIL },
+          to: [{ email: r.email }], subject: campaignSubject, htmlContent, tags: ['newsletter-campaign'],
+        }),
+        signal: AbortSignal.timeout(BREVO_TIMEOUT_MS),
+      })
+    } catch (e: any) {
+      errors.push(`${r.email}: ${e.name === 'TimeoutError' ? 'Brevo timeout' : e.message}`)
+      continue
+    }
 
     if (res.ok) {
       await sb.from('marketing_campaign_recipients').update({ sent_at: new Date().toISOString() }).eq('id', recipientRow.id)
@@ -149,5 +178,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, campaign_id: campaign.id, sent, total: recipients.length, errors })
+  // Only now — after every recipient has actually been attempted — does the
+  // campaign get its final status. 'partial' is distinguishable from a full
+  // 'sent' instead of both looking identical in the DB.
+  const finalStatus = sent === recipients.length ? 'sent' : sent > 0 ? 'partial' : 'failed'
+  await sb.from('marketing_campaigns').update({ status: finalStatus, sent_at: new Date().toISOString() }).eq('id', campaign.id)
+
+  return NextResponse.json({ ok: true, campaign_id: campaign.id, status: finalStatus, sent, total: recipients.length, errors })
 }

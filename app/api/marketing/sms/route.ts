@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthedAgent, canActAs } from '@/lib/auth'
+import { checkRateLimit } from '@/lib/rateLimit'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+// Vercel Hobby max — same reasoning as newsletter/route.ts: sequential
+// per-recipient Brevo calls scale with contact list size.
+export const maxDuration = 60
+
+const BREVO_TIMEOUT_MS = 15_000
 
 // Greek mobile numbers are stored as bare 10-digit (69XXXXXXXX); Brevo needs
 // the country code. Leave anything that already has a + alone.
@@ -56,9 +63,16 @@ export async function POST(req: NextRequest) {
     })
   }
 
+  // Same dedup-on-retry guard as newsletter/route.ts — real SMS cost per
+  // recipient, no idempotency existed here before.
+  const withinRate = await checkRateLimit(sb, `sms-send:${agent_id}`, 30, 1)
+  if (!withinRate) return NextResponse.json({ error: 'Ήδη στάλθηκε — περίμενε λίγο πριν ξαναστείλεις.' }, { status: 429 })
+
+  // status starts 'sending', not 'sent' — see newsletter/route.ts and
+  // migration 20260711170000 for why.
   const { data: campaign } = await sb.from('marketing_campaigns').insert({
     agency_id: caller.agency_id, agent_id, channel: 'sms', property_ids: [prop.id],
-    content: template, status: 'sent', sent_at: new Date().toISOString(),
+    content: template, status: 'sending',
   }).select('id').single()
   if (!campaign) return NextResponse.json({ error: 'Failed to create campaign' }, { status: 500 })
 
@@ -79,11 +93,18 @@ export async function POST(req: NextRequest) {
 
     if (!BREVO_API_KEY) { errors.push(`${r.phone}: BREVO_API_KEY not configured`); continue }
 
-    const res = await fetch('https://api.brevo.com/v3/transactionalSMS/send', {
-      method: 'POST',
-      headers: { 'api-key': BREVO_API_KEY, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sender: agentSender, recipient: toE164Greek(r.phone), content, type: 'marketing', tag: 'sms-campaign' }),
-    })
+    let res: Response
+    try {
+      res = await fetch('https://api.brevo.com/v3/transactionalSMS/send', {
+        method: 'POST',
+        headers: { 'api-key': BREVO_API_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sender: agentSender, recipient: toE164Greek(r.phone), content, type: 'marketing', tag: 'sms-campaign' }),
+        signal: AbortSignal.timeout(BREVO_TIMEOUT_MS),
+      })
+    } catch (e: any) {
+      errors.push(`${r.phone}: ${e.name === 'TimeoutError' ? 'Brevo timeout' : e.message}`)
+      continue
+    }
 
     if (res.ok) {
       const { messageId } = await res.json() as { messageId: number }
@@ -96,5 +117,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, campaign_id: campaign.id, sent, total: recipients.length, errors })
+  const finalStatus = sent === recipients.length ? 'sent' : sent > 0 ? 'partial' : 'failed'
+  await sb.from('marketing_campaigns').update({ status: finalStatus, sent_at: new Date().toISOString() }).eq('id', campaign.id)
+
+  return NextResponse.json({ ok: true, campaign_id: campaign.id, status: finalStatus, sent, total: recipients.length, errors })
 }
