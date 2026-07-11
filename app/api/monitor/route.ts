@@ -24,6 +24,13 @@ export async function GET(req: NextRequest) {
     agents = complianceData || []
   }
 
+  // agent_compliance (and the raw fallback) predate gpi_access — merged in
+  // separately rather than touching the view for one extra column.
+  const { data: gpiFlags } = await sb.from('agents').select('id, gpi_access').eq('agency_id', agencyId)
+  const gpiMap: Record<string, boolean> = {}
+  ;(gpiFlags || []).forEach(a => { gpiMap[a.id] = a.gpi_access === true })
+  agents = agents.map(a => ({ ...a, gpi_access: gpiMap[a.id] === true }))
+
   let featureUsage: any[] = []
   const { data: usageRaw } = await sb.from('agent_feature_usage')
     .select('agent_id, route, visit_count, last_visit, visits_7d, visits_30d').eq('agency_id', agencyId)

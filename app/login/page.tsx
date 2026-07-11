@@ -43,8 +43,14 @@ export default function LoginPage() {
 
     if (!data.ok) { setError(data.error || 'Σφάλμα εγγραφής.'); return }
     setSuccess(data.message)
-    // Auto-switch to login after 2s
-    setTimeout(() => { setTab('login'); setSuccess('') }, 2500)
+    // Clear the form and drop back to login once they've had a moment to
+    // read the confirmation — email/password are shared state with the
+    // login form, so leaving them filled would silently carry the just-used
+    // credentials into the next registration attempt too.
+    setTimeout(() => {
+      setTab('login'); setSuccess('')
+      setEmail(''); setPassword(''); setFullName(''); setPhone(''); setConfirm('')
+    }, 2500)
   }
 
   const inputStyle: React.CSSProperties = {

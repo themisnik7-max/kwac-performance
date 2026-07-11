@@ -27,6 +27,7 @@ export default function MonitorPage() {
   const [production,setProduction]=useState(null)
   const [pending,setPending]=useState([])
   const [pendingBusy,setPendingBusy]=useState(null)
+  const [gpiBusy,setGpiBusy]=useState(null)
   const [loading,setLoading]=useState(true)
   const [tab,setTab]=useState('compliance')
   const [filter,setFilter]=useState('all')
@@ -58,6 +59,18 @@ export default function MonitorPage() {
       if(action==='approve') load()
     }catch{showToast('Σφάλμα σύνδεσης.')}
     setPendingBusy(null)
+  }
+
+  async function toggleGpi(agentId,next){
+    setGpiBusy(agentId)
+    try{
+      const res=await authedFetch('/api/agents/permissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_id:agentId,gpi_access:next})})
+      const d=await res.json()
+      if(!res.ok){showToast('❌ '+(d.error||'Σφάλμα'));setGpiBusy(null);return}
+      setAgents(prev=>prev.map(a=>a.id===agentId?{...a,gpi_access:next}:a))
+      showToast(next?'🔓 GPI ενεργοποιήθηκε.':'🔒 GPI απενεργοποιήθηκε.')
+    }catch{showToast('Σφάλμα σύνδεσης.')}
+    setGpiBusy(null)
   }
 
   if(!isCeo) return <Shell><div style={{padding:'4rem',textAlign:'center'}}><div style={{fontSize:48,marginBottom:16}}>🔒</div><div style={{fontSize:16,color:'#888'}}>Διαθέσιμο μόνο σε CEO / Admin.</div></div></Shell>
@@ -108,9 +121,9 @@ export default function MonitorPage() {
           {loading?<div style={{padding:'3rem',textAlign:'center',color:'#bbb'}}>Φόρτωση...</div>:(
             <div style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,overflow:'hidden'}}>
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-                <thead><tr style={{background:'#F8F8F7',borderBottom:'1px solid #F0F0F0'}}>{['Μεσίτης','Μετρ. εβδ.','GPS','Meeting','Τελ. Sprint','Τελ. Υποβολή','Score'].map(h=><th key={h} style={{textAlign:'left',padding:'10px 12px',fontWeight:500,color:'#888',fontSize:12}}>{h}</th>)}</tr></thead>
+                <thead><tr style={{background:'#F8F8F7',borderBottom:'1px solid #F0F0F0'}}>{['Μεσίτης','Μετρ. εβδ.','GPS','Meeting','Τελ. Sprint','Τελ. Υποβολή','Score','GPI'].map(h=><th key={h} style={{textAlign:'left',padding:'10px 12px',fontWeight:500,color:'#888',fontSize:12}}>{h}</th>)}</tr></thead>
                 <tbody>
-                  {visible.length===0&&<tr><td colSpan={7} style={{padding:'2rem',textAlign:'center',color:'#bbb'}}>Δεν υπάρχουν αποτελέσματα.</td></tr>}
+                  {visible.length===0&&<tr><td colSpan={8} style={{padding:'2rem',textAlign:'center',color:'#bbb'}}>Δεν υπάρχουν αποτελέσματα.</td></tr>}
                   {visible.map(a=>{const sc=score(a);return(
                     <tr key={a.id} style={{borderBottom:'0.5px solid #F8F8F8'}}>
                       <td style={{padding:'12px'}}><div style={{fontWeight:500}}>{a.full_name||'—'}</div><div style={{fontSize:11,color:'#aaa'}}>{a.email}</div></td>
@@ -120,6 +133,13 @@ export default function MonitorPage() {
                       <td style={{padding:'12px',color:'#888'}}>{relativeDate(a.last_sprint_at)}</td>
                       <td style={{padding:'12px',color:'#888'}}><div>{relativeDate(a.last_submission_at)}</div><div style={{fontSize:11,color:'#ccc'}}>{a.total_submissions} συνολ.</div></td>
                       <td style={{padding:'12px'}}><div style={{display:'inline-flex',alignItems:'center',justifyContent:'center',width:28,height:28,borderRadius:'50%',fontWeight:700,fontSize:13,background:sc===4?'#EAF3DE':sc>=2?'#FFF8E6':'#FFF5F5',color:sc===4?'#3B6D11':sc>=2?'#BA7517':'#CC2229'}}>{sc}</div></td>
+                      <td style={{padding:'12px'}}>
+                        <button onClick={()=>toggleGpi(a.id,!a.gpi_access)} disabled={gpiBusy===a.id}
+                          title={a.gpi_access?'Αφαίρεση πρόσβασης GPI':'Χορήγηση πρόσβασης GPI'}
+                          style={{padding:'4px 10px',borderRadius:100,fontSize:11,fontWeight:500,border:'none',cursor:gpiBusy===a.id?'default':'pointer',background:a.gpi_access?'#EAF3DE':'#F5F5F5',color:a.gpi_access?'#3B6D11':'#999',opacity:gpiBusy===a.id?0.6:1}}>
+                          {a.gpi_access?'🔓 GPI':'🔒 GPI'}
+                        </button>
+                      </td>
                     </tr>
                   )})}
                 </tbody>

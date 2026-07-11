@@ -515,11 +515,16 @@ export default function PersonalAdminPage() {
     setLoading(true); setLoadError(null)
     const [propsRes, demsRes] = await Promise.all([
       supabase.from('meeting_properties')
-        .select('id,ilist_id,title,owner_name,owner_phone,owner_email,owner_contact_id,contacts(id,full_name,first_name,last_name,phone,email),transaction_type,address,area,floor,sqm,rooms,condition,year_built,year_renovated,balcony,parking,security_door,asking_price,seller_motivation,ai_summary,status,voice_note_ids,created_at,updated_at,agent_id,agents(full_name)')
+        // meeting_properties has two FKs into agents (agent_id and
+        // first_registered_by) — the bare `agents(full_name)` embed used
+        // pre-2026-07-12 was ambiguous and PostgREST rejected the whole
+        // query. `agents!agent_id` pins it to the uploader FK by column
+        // name, which needs no knowledge of the actual constraint name.
+        .select('id,ilist_id,title,owner_name,owner_phone,owner_email,owner_contact_id,contacts(id,full_name,first_name,last_name,phone,email),transaction_type,address,area,floor,sqm,rooms,condition,year_built,year_renovated,balcony,parking,security_door,asking_price,seller_motivation,ai_summary,status,voice_note_ids,created_at,updated_at,agent_id,agents!agent_id(full_name)')
         .order('created_at', { ascending: false })
         .limit(200),
       supabase.from('demand_profiles')
-        .select('id,client_name,client_phone,client_email,transaction_type,property_type,budget_eur,size_min,size_max,floor_min,floor_max,areas_preferred,must_have,nice_to_have,condition_req,ai_summary,status,updated_at,voice_note_ids,agent_id,agents(full_name)')
+        .select('id,client_name,client_phone,client_email,transaction_type,property_type,budget_eur,size_min,size_max,floor_min,floor_max,areas_preferred,must_have,nice_to_have,condition_req,ai_summary,status,updated_at,voice_note_ids,agent_id,agents!agent_id(full_name)')
         .order('updated_at', { ascending: false })
         .limit(200),
     ])
