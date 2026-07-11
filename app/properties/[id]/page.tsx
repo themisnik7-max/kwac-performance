@@ -6,6 +6,7 @@ import MarketingKitPanel from '@/components/MarketingKitPanel'
 import { PropertyPhotoUpload } from '@/components/PropertyPhotoUpload'
 import { PropertyDocUpload } from '@/components/PropertyDocUpload'
 import { contactName } from '@/lib/contacts'
+import { useApp } from '@/lib/AppContext'
 
 const C = {red:'#CC2229',dark:'#1A1A1A',muted:'#6B7280',border:'#EBEBEB',subtle:'#F7F7F7',white:'#FFFFFF',green:'#16A34A',greenLight:'#F0FDF4',blue:'#2563EB'}
 
@@ -67,6 +68,8 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
   const [ownerHistory,setOwnerHistory]=useState<HistoryEntry[]>([])
   const [history,setHistory]=useState<HistoryEntry[]>([])
   const [showMarketing,setShowMarketing]=useState(false)
+  const [statusChanging,setStatusChanging]=useState(false)
+  const [statusDone,setStatusDone]=useState(false)
 
   useEffect(()=>{
     supabase.auth.getUser().then(({data:d})=>{
@@ -151,8 +154,38 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
     setTimeout(()=>setSaved(false),3000)
   }
 
+  // pending -> for_appraisal, the promotion into shared "Meeting Ακινήτων"
+  // review. Server-enforced ownership (agent_id === caller, or admin/ceo) —
+  // see app/api/meeting-properties/set-status/route.ts; this is just the UI
+  // that was missing to trigger it (the API already existed and worked).
+  async function handlePromoteToAppraisal(){
+    setStatusChanging(true); setErr(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/meeting-properties/set-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ property_id: id, status: 'for_appraisal' }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setErr(data.error || 'Σφάλμα'); setStatusChanging(false); return }
+      setProp((x: any) => ({ ...x, status: 'for_appraisal' }))
+      setStatusDone(true)
+      setTimeout(() => setStatusDone(false), 3000)
+    } catch {
+      setErr('Σφάλμα σύνδεσης')
+    }
+    setStatusChanging(false)
+  }
+
   const p=prop
   const sp=(k: string)=>(v: any)=>setProp((x: any)=>({...x,[k]:v}))
+  // Edit stays owner/admin-only, matching Personal Admin's list view — RLS
+  // (meeting_properties_update) already enforces this server-side either
+  // way, this just avoids a non-owner filling out a form that would then
+  // silently fail to save.
+  const { agent, role } = useApp()
+  const canEdit = !p.agent_id || p.agent_id === agent?.id || role === 'ceo'
 
   if(!user || loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',background:'#F4F4F4'}}><div style={{fontSize:13,color:C.muted}}>Φόρτωση...</div></div>
   if(err && !p.address) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',background:'#F4F4F4'}}><div style={{fontSize:13,color:C.red}}>{err}</div></div>
@@ -170,9 +203,19 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
             </div>
             {p.area&&<p style={{fontSize:11,color:'rgba(255,255,255,.4)',margin:'3px 0 0'}}>{p.area} · {p.transaction_type==='sale'?'Πώληση':'Ενοίκιο'}{p.ilist_id&&` · ${p.ilist_id}`}</p>}
           </div>
-          <button onClick={handleSave} disabled={saving} style={{background:saved?C.green:C.red,color:'#fff',border:'none',borderRadius:10,padding:'10px 22px',fontSize:13,fontWeight:700,cursor:'pointer',transition:'background .3s'}}>
-            {saving?'Αποθήκευση...':saved?'✓ Αποθηκεύτηκε':'Αποθήκευση'}
-          </button>
+          <div style={{display:'flex',gap:10,alignItems:'center'}}>
+            {!canEdit && <span style={{fontSize:12,color:'rgba(255,255,255,.4)'}}>👁 Μόνο προβολή — ανέβηκε από άλλον μεσίτη</span>}
+            {canEdit && p.status==='pending' && (
+              <button onClick={handlePromoteToAppraisal} disabled={statusChanging} style={{background:statusDone?C.green:'transparent',color:'#fff',border:'1px solid '+(statusDone?C.green:'rgba(255,255,255,.3)'),borderRadius:10,padding:'10px 18px',fontSize:13,fontWeight:700,cursor:'pointer',transition:'background .3s'}}>
+                {statusChanging?'Αποστολή...':statusDone?'✓ Στάλθηκε':'→ Προς Εκτίμηση'}
+              </button>
+            )}
+            {canEdit && (
+              <button onClick={handleSave} disabled={saving} style={{background:saved?C.green:C.red,color:'#fff',border:'none',borderRadius:10,padding:'10px 22px',fontSize:13,fontWeight:700,cursor:'pointer',transition:'background .3s'}}>
+                {saving?'Αποθήκευση...':saved?'✓ Αποθηκεύτηκε':'Αποθήκευση'}
+              </button>
+            )}
+          </div>
         </div>
 
         <div style={{flex:1,overflowY:'auto',padding:'24px 28px'}}>
@@ -183,7 +226,7 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
           </button>
           {showMarketing && <MarketingKitPanel prop={{...p, bedrooms: p.rooms, ilist_code: p.ilist_id, city: 'Αθήνα'}} user={{id: user.id, email: user.email}} />}
 
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,...(canEdit?{}:{pointerEvents:'none',opacity:.65})}}>
             <div>
               <Sec>Στοιχεία Ακινήτου</Sec>
               <Field label="Διεύθυνση" value={p.address} onChange={sp('address')} required placeholder="π.χ. Λεωφ. Βουλιαγμένης 142"/>

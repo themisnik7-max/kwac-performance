@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthedAgent, isCeoOrAdmin } from '@/lib/auth'
-import { redactGpiClient, encryptGpiCredentials, type GpiClientRow } from '@/lib/gpi'
+import { redactGpiClient, encryptGpiCredentials, hasGpiFeatureAccess, type GpiClientRow } from '@/lib/gpi'
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
@@ -9,8 +9,9 @@ const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 export async function GET(req: NextRequest) {
   const caller = await getAuthedAgent(req)
   if (!caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!hasGpiFeatureAccess(caller)) return NextResponse.json({ error: 'GPI δεν είναι διαθέσιμο για τον λογαριασμό σου' }, { status: 403 })
 
-  let query = db.from('gpi_clients').select('*').eq('agency_id', caller.agency_id).order('created_at', { ascending: false })
+  let query = db.from('gpi_clients').select('*').eq('agency_id', caller.agency_id).order('created_at', { ascending: false }).limit(1000)
   if (!isCeoOrAdmin(caller)) query = query.eq('agent_id', caller.id)
 
   const { data, error } = await query
@@ -27,6 +28,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const caller = await getAuthedAgent(req)
   if (!caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!hasGpiFeatureAccess(caller)) return NextResponse.json({ error: 'GPI δεν είναι διαθέσιμο για τον λογαριασμό σου' }, { status: 403 })
 
   const body = await req.json()
   if (!body.full_name) return NextResponse.json({ error: 'full_name required' }, { status: 400 })

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Shell from '@/components/Shell'
+import LockedFeature from '@/components/LockedFeature'
 import { authedFetch } from '@/lib/authedFetch'
 import { useApp } from '@/lib/AppContext'
 
@@ -30,7 +31,8 @@ function Field({ label, value, onChange, type = 'text' }: any) {
 
 export default function GpiListPage() {
   const router = useRouter()
-  const { role } = useApp()
+  const { role, agent, loading: appLoading } = useApp()
+  const hasAccess = role === 'ceo' || agent?.gpi_access === true
   const [clients, setClients] = useState<GpiClientListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
@@ -47,7 +49,16 @@ export default function GpiListPage() {
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  // Wait for the real access flag before deciding — avoids a flash of the
+  // locked state while useApp() is still resolving the agent row. The real
+  // boundary is server-side (hasGpiFeatureAccess in every /api/gpi/** route)
+  // — this is purely to skip a pointless 403 round trip and show a clean
+  // message instead of a raw error banner.
+  useEffect(() => { if (!appLoading && hasAccess) load() }, [appLoading, hasAccess])
+
+  if (!appLoading && !hasAccess) {
+    return <Shell><LockedFeature title="Το GPI είναι κλειδωμένο" message="Αυτό το feature είναι διαθέσιμο μόνο στον ορισμένο λογαριασμό GPI της υπηρεσίας, ή σε CEO/Admin." /></Shell>
+  }
 
   async function createClient() {
     if (!newName.trim()) return

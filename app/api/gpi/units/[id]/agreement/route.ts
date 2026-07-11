@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthedAgent } from '@/lib/auth'
-import { canAccessGpiClient, buildAgreementData, type GpiClientRow, type GpiUnitRow } from '@/lib/gpi'
+import { canAccessGpiClient, buildAgreementData, hasGpiFeatureAccess, type GpiClientRow, type GpiUnitRow } from '@/lib/gpi'
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
@@ -9,6 +9,7 @@ const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const caller = await getAuthedAgent(req)
   if (!caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!hasGpiFeatureAccess(caller)) return NextResponse.json({ error: 'GPI δεν είναι διαθέσιμο για τον λογαριασμό σου' }, { status: 403 })
 
   const { data: unit } = await db.from('gpi_units').select('*').eq('id', params.id).single()
   if (!unit) return NextResponse.json({ error: 'Not found' }, { status: 404 })

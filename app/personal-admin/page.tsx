@@ -5,6 +5,7 @@ import { useRouter }           from 'next/navigation'
 import { createClient }        from '@supabase/supabase-js'
 import { VoiceMemoButton }     from '@/components/VoiceMemoButton'
 import { contactName }         from '@/lib/contacts'
+import { useApp }              from '@/lib/AppContext'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,6 +15,8 @@ const supabase = createClient(
 // ── Types ─────────────────────────────────────────────────────────
 
 type OwnerContact = { id: string; full_name: string | null; first_name: string | null; last_name: string | null; phone: string | null; email: string | null }
+
+type UploaderAgent = { full_name: string | null } | null
 
 type PropertyRow = {
   id: string; ilist_id: string | null; title: string | null
@@ -26,6 +29,7 @@ type PropertyRow = {
   asking_price: number | null; seller_motivation: string | null
   ai_summary: string | null; status: string
   voice_note_ids: string[]; created_at: string; updated_at: string | null
+  agent_id: string; agents: UploaderAgent
 }
 
 type DemandRow = {
@@ -35,6 +39,7 @@ type DemandRow = {
   areas_preferred: string[]; must_have: string[]; nice_to_have: string[]
   condition_req: string | null; ai_summary: string | null; status: string
   updated_at: string; voice_note_ids: string[]
+  agent_id: string; agents: UploaderAgent
 }
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -222,7 +227,7 @@ function NewPropertyForm({ onSaved, onCancel }: { onSaved: () => void; onCancel:
 
 // ── Properties + owners table ────────────────────────────────────
 
-function PropertiesTable({ rows }: { rows: PropertyRow[] }) {
+function PropertiesTable({ rows, myAgentId }: { rows: PropertyRow[]; myAgentId: string | null }) {
   const router = useRouter()
 
   const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #1e1e1e' }
@@ -238,6 +243,7 @@ function PropertiesTable({ rows }: { rows: PropertyRow[] }) {
             <th style={th}>Τύπος</th>
             <th style={th}>Τιμή</th>
             <th style={th}>Κατάσταση</th>
+            <th style={th}>Ανέβηκε από</th>
           </tr>
         </thead>
         <tbody>
@@ -245,13 +251,14 @@ function PropertiesTable({ rows }: { rows: PropertyRow[] }) {
             const linkedOwner = row.contacts
             const ownerLabel = linkedOwner ? contactName(linkedOwner) : row.owner_name
             const ownerPhone = linkedOwner?.phone ?? row.owner_phone
+            const mine = row.agent_id === myAgentId
             return (
               <tr key={row.id} style={{ cursor: 'default' }}>
                 <td style={td}>
                   <span
                     onClick={() => router.push(`/properties/${row.id}`)}
                     style={{ cursor: 'pointer', color: '#f0f0f0', fontWeight: 600 }}
-                    title="Άνοιγμα φακέλου ακινήτου"
+                    title={mine ? 'Άνοιγμα φακέλου ακινήτου' : 'Προβολή φακέλου ακινήτου (μόνο ο μεσίτης που το ανέβασε μπορεί να το επεξεργαστεί)'}
                   >
                     {row.address || row.title || 'Ακίνητο'}
                   </span>
@@ -277,6 +284,7 @@ function PropertiesTable({ rows }: { rows: PropertyRow[] }) {
                 <td style={td}>{TTL_MAP[row.transaction_type ?? ''] ?? row.transaction_type ?? '—'}</td>
                 <td style={td}>{row.asking_price ? fmt(row.asking_price, '€') : '—'}</td>
                 <td style={td}><Badge s={row.status} /></td>
+                <td style={td}>{mine ? <span style={{ color: '#86efac' }}>Εσύ</span> : (row.agents?.full_name ?? '—')}</td>
               </tr>
             )
           })}
@@ -296,8 +304,8 @@ const EMPTY_DEM: ES = {
   condition_req: '', ai_summary: '',
 }
 
-function DemandCard({ row, onSaved, onCancel, isNew }: {
-  row: DemandRow | null; onSaved: () => void; onCancel?: () => void; isNew?: boolean
+function DemandCard({ row, onSaved, onCancel, isNew, canEdit }: {
+  row: DemandRow | null; onSaved: () => void; onCancel?: () => void; isNew?: boolean; canEdit: boolean
 }) {
   const [open,        setOpen]        = useState(!!isNew)
   const [editMode,    setEditMode]    = useState(!!isNew)
@@ -420,6 +428,7 @@ function DemandCard({ row, onSaved, onCancel, isNew }: {
         <div style={{ flex: 1, minWidth: 0 }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: '#f0f0f0' }}>{row?.client_name ?? 'Νέα Ζήτηση'}</span>
           {row?.client_phone && <span style={{ fontSize: 11, color: '#555', marginLeft: 10 }}>{row.client_phone}</span>}
+          {!isNew && !canEdit && <span style={{ fontSize: 11, color: '#555', marginLeft: 10 }}>· ανέβηκε από {row?.agents?.full_name ?? '—'}</span>}
         </div>
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
           {row && <Badge s={row.status} />}
@@ -429,13 +438,15 @@ function DemandCard({ row, onSaved, onCancel, isNew }: {
               {matching ? '⏳' : '📧 Match'}
             </button>
           )}
-          {!isNew && <button onClick={() => { setEditMode(p => !p); setErr(null) }} style={btnS('#1e1e1e', '#666')}>{editMode ? 'Άκυρο' : '✏'}</button>}
+          {!isNew && canEdit && <button onClick={() => { setEditMode(p => !p); setErr(null) }} style={btnS('#1e1e1e', '#666')}>{editMode ? 'Άκυρο' : '✏'}</button>}
           {!isNew && <button onClick={() => { setOpen(false); setEditMode(false) }} style={btnS('#0a0a0a', '#333')}>✕</button>}
         </div>
       </div>
 
-      {/* Status chips */}
-      {row && (
+      {/* Status chips — only the uploader (or admin/ceo, folded into canEdit
+          by the parent) can change status; everyone else just sees the
+          read-only Badge above. */}
+      {row && canEdit && (
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 10 }}>
           {DEM_STATUSES.map(s => {
             const active = row.status === s.v
@@ -481,40 +492,43 @@ function DemandCard({ row, onSaved, onCancel, isNew }: {
 // ── Page ──────────────────────────────────────────────────────────
 
 export default function PersonalAdminPage() {
+  const { agent, role, loading: appLoading } = useApp()
+  const myAgentId = agent?.id ?? null
+  const isCeoOrAdmin = role === 'ceo'
   const [tab,        setTab]        = useState<'properties' | 'demand'>('properties')
   const [properties, setProperties] = useState<PropertyRow[]>([])
   const [demands,    setDemands]    = useState<DemandRow[]>([])
   const [loading,    setLoading]    = useState(true)
   const [loadError,  setLoadError]  = useState<string | null>(null)
-  const [userId,     setUserId]     = useState<string | null>(null)
   const [showNew,    setShowNew]    = useState(false)
   const [search,     setSearch]     = useState('')
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => setUserId(session?.user?.id ?? null))
-  }, [])
-
+  // Agency-wide now, not just "mine" — RLS already scopes meeting_properties
+  // this exact way (own rows regardless of status, or any agency row once
+  // it's past 'pending', see migration 021), so no policy change was needed
+  // there. demand_profiles had no agency-wide SELECT policy at all before
+  // migration 20260712100000 — a plain agent literally could not see a
+  // colleague's row until that policy was added. Edit rights stay
+  // owner/admin-only in both cases (unchanged).
   const load = useCallback(async () => {
-    if (!userId) return
+    if (appLoading) return
     setLoading(true); setLoadError(null)
     const [propsRes, demsRes] = await Promise.all([
       supabase.from('meeting_properties')
-        .select('id,ilist_id,title,owner_name,owner_phone,owner_email,owner_contact_id,contacts(id,full_name,first_name,last_name,phone,email),transaction_type,address,area,floor,sqm,rooms,condition,year_built,year_renovated,balcony,parking,security_door,asking_price,seller_motivation,ai_summary,status,voice_note_ids,created_at,updated_at')
-        .eq('agent_id', userId)
+        .select('id,ilist_id,title,owner_name,owner_phone,owner_email,owner_contact_id,contacts(id,full_name,first_name,last_name,phone,email),transaction_type,address,area,floor,sqm,rooms,condition,year_built,year_renovated,balcony,parking,security_door,asking_price,seller_motivation,ai_summary,status,voice_note_ids,created_at,updated_at,agent_id,agents(full_name)')
         .order('created_at', { ascending: false })
         .limit(200),
       supabase.from('demand_profiles')
-        .select('id,client_name,client_phone,client_email,transaction_type,property_type,budget_eur,size_min,size_max,floor_min,floor_max,areas_preferred,must_have,nice_to_have,condition_req,ai_summary,status,updated_at,voice_note_ids')
-        .eq('agent_id', userId)
+        .select('id,client_name,client_phone,client_email,transaction_type,property_type,budget_eur,size_min,size_max,floor_min,floor_max,areas_preferred,must_have,nice_to_have,condition_req,ai_summary,status,updated_at,voice_note_ids,agent_id,agents(full_name)')
         .order('updated_at', { ascending: false })
         .limit(200),
     ])
     if (propsRes.error) setLoadError(`Ακίνητα: ${propsRes.error.message}`)
     if (demsRes.error)  setLoadError(e => e ? e + ' | ' + demsRes.error!.message : `Ζητήσεις: ${demsRes.error!.message}`)
     setProperties((propsRes.data ?? []) as unknown as PropertyRow[])
-    setDemands((demsRes.data ?? []) as DemandRow[])
+    setDemands((demsRes.data ?? []) as unknown as DemandRow[])
     setLoading(false)
-  }, [userId])
+  }, [appLoading])
 
   useEffect(() => { load() }, [load])
 
@@ -577,9 +591,10 @@ export default function PersonalAdminPage() {
 
       {/* New entry */}
       {showNew && tab === 'properties' && <NewPropertyForm onSaved={afterSave} onCancel={() => setShowNew(false)} />}
-      {showNew && tab === 'demand'     && <DemandCard   row={null} isNew onSaved={afterSave} onCancel={() => setShowNew(false)} />}
+      {showNew && tab === 'demand'     && <DemandCard   row={null} isNew canEdit onSaved={afterSave} onCancel={() => setShowNew(false)} />}
 
-      {/* Lists */}
+      {/* Lists — agency-wide; edit rights (checked per-row below) stay
+          limited to whoever uploaded it, or admin/ceo. */}
       {!loading && tab === 'properties' && (
         <>
           {filteredProps.length === 0 && !showNew && (
@@ -587,7 +602,7 @@ export default function PersonalAdminPage() {
               {search ? 'Κανένα αποτέλεσμα.' : 'Κανένα ακίνητο — πάτα + Νέο ή μίλα.'}
             </p>
           )}
-          {filteredProps.length > 0 && <PropertiesTable rows={filteredProps} />}
+          {filteredProps.length > 0 && <PropertiesTable rows={filteredProps} myAgentId={myAgentId} />}
         </>
       )}
 
@@ -598,7 +613,9 @@ export default function PersonalAdminPage() {
               {search ? 'Κανένα αποτέλεσμα.' : 'Καμία ζήτηση — πάτα + Νέο.'}
             </p>
           )}
-          {filteredDems.map(row => <DemandCard key={row.id} row={row} onSaved={load} />)}
+          {filteredDems.map(row => (
+            <DemandCard key={row.id} row={row} canEdit={row.agent_id === myAgentId || isCeoOrAdmin} onSaved={load} />
+          ))}
         </>
       )}
     </div>

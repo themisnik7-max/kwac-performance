@@ -12,12 +12,42 @@ export type AuthedAgent = {
   role: string
   agency_id: string
   full_name: string | null
+  gpi_access: boolean
 }
 
-// Returns the calling agent, or null if there's no valid session. Reads the
-// access token from the Authorization header — the client must attach it
-// (see lib/authedFetch.ts), since this app stores the Supabase session in
-// the browser, not in an httpOnly cookie that would reach this route for free.
+// middleware.ts's system_active kill-switch only covers page navigation
+// (its own matcher explicitly excludes api/) — a locked-out agency's API
+// access kept working fully even while their UI redirected to /locked.
+// Checked here instead so every service-role route gets it for free via
+// getAuthedAgent, with no per-route wiring needed. Also fixes a real bug
+// found while adding this: middleware.ts's own check is
+// `agencies.select('system_active').limit(1)` — GLOBAL, not scoped to the
+// visitor's own agency (the same "first agency in the system" single-
+// tenant shortcut CLAUDE.md flags as a bug class, already found and fixed
+// twice elsewhere this session). This version is scoped to the caller's
+// actual agency_id from the start.
+const SYSTEM_ACTIVE_TTL_MS = 5 * 60 * 1000
+const systemActiveCache = new Map<string, { active: boolean; expiresAt: number }>()
+
+async function isAgencyActive(agencyId: string): Promise<boolean> {
+  const now = Date.now()
+  const cached = systemActiveCache.get(agencyId)
+  if (cached && cached.expiresAt > now) return cached.active
+  const { data, error } = await sb.from('agencies').select('system_active').eq('id', agencyId).single()
+  // Fails open on an infra error (can't distinguish "column doesn't exist
+  // yet" from "DB unreachable" here), same as middleware.ts's own fallback —
+  // a lock-check outage should never be the reason every agency loses
+  // access. system_active itself defaults active unless explicitly false.
+  const active = error ? true : data?.system_active !== false
+  systemActiveCache.set(agencyId, { active, expiresAt: now + SYSTEM_ACTIVE_TTL_MS })
+  return active
+}
+
+// Returns the calling agent, or null if there's no valid session or their
+// agency has been deactivated. Reads the access token from the
+// Authorization header — the client must attach it (see
+// lib/authedFetch.ts), since this app stores the Supabase session in the
+// browser, not in an httpOnly cookie that would reach this route for free.
 export async function getAuthedAgent(req: NextRequest): Promise<AuthedAgent | null> {
   const authHeader = req.headers.get('authorization') || ''
   const token = authHeader.replace(/^Bearer\s+/i, '')
@@ -26,8 +56,16 @@ export async function getAuthedAgent(req: NextRequest): Promise<AuthedAgent | nu
   const { data: userData, error } = await sb.auth.getUser(token)
   if (error || !userData?.user?.email) return null
 
-  const { data: agent } = await sb.from('agents').select('id,email,role,agency_id,full_name').eq('email', userData.user.email).single()
+  const { data: agent } = await sb.from('agents').select('id,email,role,agency_id,full_name,is_active,gpi_access').eq('email', userData.user.email).single()
   if (!agent) return null
+
+  // Agents created pending admin approval (agencies.require_approval) or
+  // later deactivated are is_active=false. The Supabase auth session is
+  // still valid either way — this is the actual gate, checked on every
+  // service-role route via getAuthedAgent. Fail closed.
+  if (agent.is_active === false) return null
+
+  if (!(await isAgencyActive(agent.agency_id))) return null
 
   return agent as AuthedAgent
 }

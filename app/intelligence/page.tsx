@@ -1,6 +1,7 @@
 'use client'
 import { useState, useEffect } from 'react'
 import Shell from '@/components/Shell'
+import LockedFeature from '@/components/LockedFeature'
 import { useApp } from '@/lib/AppContext'
 import { authedFetch } from '@/lib/authedFetch'
 
@@ -29,72 +30,6 @@ function MiniBar({ label, actual, target, color }) {
       <div style={{ background: '#f0f0f0', borderRadius: 100, height: 8, overflow: 'hidden' }}>
         <div style={{ height: '100%', background: onTrack ? '#3B6D11' : color, width: ratio100 + '%', borderRadius: 100, transition: 'width .5s ease' }} />
       </div>
-    </div>
-  )
-}
-
-function AgentIntelligence() {
-  const [data, setData] = useState(null)
-  const [tab, setTab] = useState('overview')
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    authedFetch('/api/intelligence-agent').then(r => r.json()).then(d => { setData(d); setLoading(false) }).catch(() => setLoading(false))
-  }, [])
-
-  if (loading) return <div style={{ padding: '4rem', textAlign: 'center', color: '#bbb' }}>Φόρτωση...</div>
-  if (!data) return <div style={{ padding: '4rem', textAlign: 'center', color: '#CC2229' }}>Σφάλμα φόρτωσης.</div>
-
-  const { actuals, weeklyTargets, gps, submissions, insights } = data
-  const TABS = [{ key: 'overview', label: 'Επισκόπηση' }, { key: 'trend', label: 'Εβδομαδιαία' }, { key: 'funnel', label: 'Funnel vs GPS' }]
-
-  return (
-    <div>
-      <div style={{ background: '#1a1a1a', color: '#fff', borderRadius: 12, padding: '1.25rem 1.5rem', marginBottom: 20, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>{actuals.dealsThisMonth > 0 ? '🔥' : '🎯'} Γεια σου, {data.agent?.name?.split(' ')[0]}!</div>
-          <div style={{ fontSize: 13, color: '#aaa', marginTop: 2 }}>{actuals.activeListings} ενεργά ακίνητα · {actuals.dealsThisMonth} deals αυτό τον μήνα{gps ? ` · Στόχος €${fmt(Math.round(gps.targetIncome / 12))}/μήνα` : ' · Δεν έχεις GPS στόχο'}</div>
-        </div>
-        {!gps && <a href="/gps" style={{ padding: '8px 16px', background: '#CC2229', color: '#fff', borderRadius: 8, fontSize: 13, fontWeight: 500, textDecoration: 'none' }}>Ορισμός GPS →</a>}
-      </div>
-      <div style={{ marginBottom: 20 }}>
-        {(insights || []).map((ins, i) => (
-          <div key={i} style={{ padding: '10px 14px', borderLeft: '3px solid #CC2229', background: '#fff', marginBottom: 8, borderRadius: '0 8px 8px 0', fontSize: 13, lineHeight: 1.5 }}>{ins}</div>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20 }}>
-        {TABS.map(t => (
-          <button key={t.key} onClick={() => setTab(t.key)} style={{ padding: '7px 16px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 500, cursor: 'pointer', background: tab === t.key ? '#1a1a1a' : '#fff', color: tab === t.key ? '#fff' : '#666', outline: tab === t.key ? 'none' : '0.5px solid #e8e8e8' }}>{t.label}</button>
-        ))}
-      </div>
-      {tab === 'overview' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-          <KPI label="Avg Calls/εβδ" value={actuals.avgCalls} sub={weeklyTargets ? `στόχος ${weeklyTargets.calls}/εβδ` : 'Ορίσου GPS'} color={weeklyTargets && actuals.avgCalls >= weeklyTargets.calls ? '#3B6D11' : '#CC2229'} />
-          <KPI label="Avg Ραντεβού/εβδ" value={actuals.avgAppt1} sub={weeklyTargets ? `στόχος ${weeklyTargets.appt1}/εβδ` : ''} color={weeklyTargets && actuals.avgAppt1 >= weeklyTargets.appt1 ? '#3B6D11' : '#CC2229'} />
-          <KPI label="Deals αυτό τον μήνα" value={actuals.dealsThisMonth} color="#1a1a1a" />
-          <KPI label="Εβδ. Μετρησιμότητες" value={actuals.submissionsCount} sub="συνολικά" />
-          <KPI label="Ενεργά Ακίνητα" value={actuals.activeListings} sub="στο iList" />
-          <KPI label="CR Call→Ραντ" value={actuals.avgCalls > 0 ? pct(actuals.avgAppt1, actuals.avgCalls) + '%' : '—'} color={gps && pct(actuals.avgAppt1, actuals.avgCalls) >= gps.crCallAppt1 ? '#3B6D11' : '#CC2229'} />
-        </div>
-      )}
-      {tab === 'funnel' && (
-        <div style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '1.25rem' }}>
-          {!weeklyTargets ? (
-            <div style={{ textAlign: 'center', padding: '2rem' }}>
-              <div style={{ fontSize: 14, color: '#888', marginBottom: 12 }}>Δεν έχεις GPS στόχο ακόμα.</div>
-              <a href="/gps" style={{ padding: '10px 20px', background: '#CC2229', color: '#fff', borderRadius: 8, fontSize: 14, fontWeight: 500, textDecoration: 'none' }}>Ορισμός GPS →</a>
-            </div>
-          ) : (
-            <div>
-              <MiniBar label="📞 Calls/εβδ" actual={actuals.avgCalls} target={weeklyTargets.calls} color="#378ADD" />
-              <MiniBar label="📅 1α Ραντεβού/εβδ" actual={actuals.avgAppt1} target={weeklyTargets.appt1} color="#BA7517" />
-              <MiniBar label="🤝 2α Ραντεβού/εβδ" actual={actuals.avgAppt2} target={weeklyTargets.appt2} color="#534AB7" />
-              <MiniBar label="📋 Αναθέσεις/εβδ" actual={actuals.avgExclusives} target={weeklyTargets.listings} color="#0F6E56" />
-              <MiniBar label="✅ Deals/εβδ" actual={actuals.avgContracts} target={weeklyTargets.deals} color="#3B6D11" />
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }
@@ -405,16 +340,27 @@ function CeoIntelligence() {
 }
 
 export default function IntelligencePage() {
-  const { role } = useApp()
+  const { role, loading } = useApp()
   const isCeo = role === 'ceo'
+
+  // Locked for regular agents by product decision — Intelligence OP is
+  // admin/CEO-only now, same treatment as GPI. `loading` guard avoids a
+  // flash of the locked state while useApp() is still resolving the real
+  // role. Server-side, CeoIntelligence's own data route
+  // (/api/monitor/production) is already admin-gated — this just stops a
+  // regular agent from landing on a half-working page instead of a clear one.
+  if (!loading && !isCeo) {
+    return <Shell><LockedFeature title="Το Intelligence OP είναι κλειδωμένο" message="Αυτή η προβολή είναι διαθέσιμη μόνο σε CEO/Admin." /></Shell>
+  }
+
   return (
     <Shell>
       <div style={{ padding: '2rem', maxWidth: 1100 }}>
         <div style={{ marginBottom: '1.5rem' }}>
-          <h1 style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', margin: 0 }}>{isCeo ? 'Intelligence OP — Εταιρική Εικόνα' : 'Intelligence OP — Η Πρόοδός μου'}</h1>
-          <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>{isCeo ? 'Συγκεντρωτική εικόνα portfolio, παραγωγής και περιοχών — όλο το γραφείο μακροσκοπικά' : 'Προσωπική ανάλυση, coaching insights, στόχοι vs πραγματικότητα'}</p>
+          <h1 style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', margin: 0 }}>Intelligence OP — Εταιρική Εικόνα</h1>
+          <p style={{ color: '#888', fontSize: 14, margin: '4px 0 0' }}>Συγκεντρωτική εικόνα portfolio, παραγωγής και περιοχών — όλο το γραφείο μακροσκοπικά</p>
         </div>
-        {isCeo ? <CeoIntelligence /> : <AgentIntelligence />}
+        <CeoIntelligence />
       </div>
     </Shell>
   )

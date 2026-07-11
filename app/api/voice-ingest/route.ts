@@ -1,16 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient }              from '@supabase/supabase-js'
+import { getAuthedAgent }            from '@/lib/auth'
+import { splitName }                 from '@/lib/contacts'
 
 const SUPABASE_URL     = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const SUPABASE_ANON    = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
-
-async function resolveUser(token: string) {
-  const c = createClient(SUPABASE_URL, SUPABASE_ANON, { auth: { persistSession: false } })
-  const { data: { user }, error } = await c.auth.getUser(token)
-  if (error || !user) return null
-  return user
-}
 
 const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
@@ -18,23 +12,16 @@ const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 // All path now writes to meeting_properties — the single unified property table.
 export async function POST(req: NextRequest) {
 
-  // 1. Auth
-  const token = req.headers.get('Authorization')?.replace('Bearer ', '') ?? ''
-  const user  = await resolveUser(token)
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // 1. Auth — same pattern as every other route. No agency fallback: a
+  // caller who doesn't resolve to a real agent gets 401, not "the first
+  // agency in the system" (that fallback used to silently misfile real
+  // agents' scouted properties into whichever agency happened to be
+  // created first, the moment agents.id stopped matching auth.users.id).
+  const caller = await getAuthedAgent(req)
+  if (!caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const agencyId = caller.agency_id
 
-  // 2. Resolve agency_id
-  let agencyId: string | null = null
-  const { data: agentRow } = await db.from('agents').select('agency_id').eq('id', user.id).single()
-  if (agentRow?.agency_id) {
-    agencyId = agentRow.agency_id
-  } else {
-    const { data: agency } = await db.from('agencies').select('id').order('created_at').limit(1).single()
-    agencyId = agency?.id ?? null
-  }
-  if (!agencyId) return NextResponse.json({ error: 'No agency configured' }, { status: 403 })
-
-  // 3. Parse body
+  // 2. Parse body
   const body       = await req.json()
   const transcript = (body.transcript as string | undefined)?.trim()
   const intent     = body.intent     as string | undefined
@@ -53,7 +40,7 @@ export async function POST(req: NextRequest) {
       .from('voice_notes')
       .insert({
         agency_id:   agencyId,
-        agent_id:    user.id,
+        agent_id:    caller.id,
         lead_id:     leadId     ?? null,
         property_id: propertyId ?? null,
         meeting_id:  meetingId  ?? null,
@@ -78,13 +65,19 @@ export async function POST(req: NextRequest) {
       const { data: ex } = await db
         .from('meeting_properties')
         .select('id')
-        .eq('agent_id', user.id)
+        .eq('agent_id', caller.id)
         .eq('owner_phone', phone)
         .single()
       existingId = ex?.id ?? null
     }
 
-    // Link owner to contacts table if phone matches
+    // Link owner to contacts table if phone matches; auto-create one if none
+    // does. Previously this only ever linked to an EXISTING contact — an
+    // owner given by name+phone with no prior contact record stayed
+    // unlinked forever, so Personal Admin / the property detail page had
+    // nothing to make clickable ("δεν έχει συνδεθεί ακόμα με καρτέλα
+    // επαφής"). A manually-entered owner should always end up with a real
+    // contact card, same as add_contact does for AI Admin.
     let ownerContactId: string | null = null
     if (phone && agencyId) {
       const { data: contact } = await db
@@ -94,12 +87,24 @@ export async function POST(req: NextRequest) {
         .or(`phone.eq.${phone},phone2.eq.${phone}`)
         .limit(1)
         .single()
-      ownerContactId = contact?.id ?? null
+      if (contact) {
+        ownerContactId = contact.id
+      } else {
+        const ownerName = (fields.owner_name as string) || null
+        const { first_name, last_name } = splitName(ownerName || '')
+        const { data: created, error: contactErr } = await db.from('contacts').insert({
+          agency_id: agencyId, full_name: ownerName,
+          first_name: first_name || null, last_name: last_name || null,
+          phone, email: (fields.owner_email as string) ?? null, type: 'contact',
+        }).select('id').single()
+        if (contactErr) console.error('[voice-ingest] owner contact auto-create (non-fatal)', contactErr)
+        ownerContactId = created?.id ?? null
+      }
     }
 
     const payload = {
       agency_id:         agencyId,
-      agent_id:          user.id,
+      agent_id:          caller.id,
       raw_transcript:    transcript,
       owner_phone:       phone,
       owner_email:       (fields.owner_email       as string) ?? null,
@@ -124,7 +129,7 @@ export async function POST(req: NextRequest) {
       title:             (fields.address as string) || (fields.area as string) || 'Νέο Ακίνητο',
       status:            'pending',
       meeting_date:      new Date().toISOString().split('T')[0],
-      first_registered_by: user.id,
+      first_registered_by: caller.id,
     }
 
     if (existingId) {
@@ -165,7 +170,7 @@ export async function POST(req: NextRequest) {
       const { data: ex } = await db
         .from('demand_profiles')
         .select('id')
-        .eq('agent_id', user.id)
+        .eq('agent_id', caller.id)
         .eq('client_phone', phone)
         .single()
       existingId = ex?.id ?? null
@@ -173,7 +178,7 @@ export async function POST(req: NextRequest) {
 
     const payload = {
       agency_id:        agencyId,
-      agent_id:         user.id,
+      agent_id:         caller.id,
       lead_id:          leadId ?? null,
       raw_transcript:   transcript,
       client_name:      (fields.client_name      as string)   ?? null,
@@ -196,14 +201,14 @@ export async function POST(req: NextRequest) {
     let demandId: string | null = existingId
     if (existingId) {
       await db.from('demand_profiles').update(payload).eq('id', existingId)
-      if (note) await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
+      if (note) await db.rpc('append_voice_note_to_demand', { p_agent_id: caller.id, p_phone: phone, p_note_id: note.id })
     } else {
       const { data: dp } = await db.from('demand_profiles')
         .insert({ ...payload, status: 'active' })
         .select('id').single()
       demandId = dp?.id ?? null
       if (dp?.id && phone) {
-        if (note) await db.rpc('append_voice_note_to_demand', { p_agent_id: user.id, p_phone: phone, p_note_id: note.id })
+        if (note) await db.rpc('append_voice_note_to_demand', { p_agent_id: caller.id, p_phone: phone, p_note_id: note.id })
       }
     }
 

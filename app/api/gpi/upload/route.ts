@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthedAgent } from '@/lib/auth'
-import { canAccessGpiClient, type GpiClientRow } from '@/lib/gpi'
+import { canAccessGpiClient, hasGpiFeatureAccess, type GpiClientRow } from '@/lib/gpi'
+import { safeExtension } from '@/lib/uploads'
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 const BUCKET = 'gpi-documents'
@@ -11,6 +12,7 @@ const MAX_FILE_MB = 15
 export async function POST(req: NextRequest) {
   const caller = await getAuthedAgent(req)
   if (!caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (!hasGpiFeatureAccess(caller)) return NextResponse.json({ error: 'GPI δεν είναι διαθέσιμο για τον λογαριασμό σου' }, { status: 403 })
 
   const form = await req.formData()
   const clientId = form.get('client_id') as string | null
@@ -22,7 +24,7 @@ export async function POST(req: NextRequest) {
 
   if (file.size > MAX_FILE_MB * 1024 * 1024) return NextResponse.json({ error: `Exceeds ${MAX_FILE_MB}MB` }, { status: 400 })
 
-  const ext = file.name.split('.').pop()?.toLowerCase() ?? 'jpg'
+  const ext = safeExtension(file.name, 'jpg')
   const path = `${client.agency_id}/${clientId}/id-${Date.now()}.${ext}`
 
   const { error: upErr } = await db.storage.from(BUCKET).upload(path, await file.arrayBuffer(), {

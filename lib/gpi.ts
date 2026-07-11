@@ -65,6 +65,14 @@ export function canAccessGpiClient(caller: AuthedAgent, client: { agency_id: str
   return isCeoOrAdmin(caller) || client.agent_id === caller.id
 }
 
+// Feature-level gate, separate from canAccessGpiClient's per-row ownership
+// check above: is this agent allowed to use GPI AT ALL. Locked to a
+// per-agency-designated account (agents.gpi_access) for now, plus the usual
+// admin/ceo override every other gated feature in this app already has.
+export function hasGpiFeatureAccess(caller: AuthedAgent): boolean {
+  return isCeoOrAdmin(caller) || caller.gpi_access === true
+}
+
 export type GpiUnitRow = {
   id: string
   agency_id: string
