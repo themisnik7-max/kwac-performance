@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { getAuthedAgent, isCeoOrAdmin } from '@/lib/auth'
+import { checkRateLimit } from '@/lib/rateLimit'
 import { getIntelligenceData } from '@/lib/intelligenceData'
 import {
   DAILY_ACTION_CAP, CONFIRM_REQUIRED_TOOLS, buildSystemPrompt, callClaude, checkAndIncrementUsage, logAction,
@@ -20,6 +21,12 @@ const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPAB
 export async function POST(req: NextRequest) {
   const caller = await getAuthedAgent(req)
   if (!caller) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+
+  // Per-minute cap distinct from DAILY_ACTION_CAP below — the daily cap
+  // alone doesn't stop a scripted/compromised session from burning a
+  // whole day's worth of Claude calls (and confirmed sends) in seconds.
+  const withinRate = await checkRateLimit(sb, `intelligence-chat:${caller.id}`, 60, 15)
+  if (!withinRate) return NextResponse.json({ reply: 'Πολλά αιτήματα σε σύντομο διάστημα — δοκίμασε ξανά σε λίγο.', blocked: true }, { status: 429 })
 
   const body = await req.json()
   const origin = req.nextUrl.origin

@@ -4,6 +4,12 @@ import { buildAgreementData, type GpiClientRow, type GpiUnitRow } from '@/lib/gp
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
+// Never cache this response. The unused `_req` param meant nothing here
+// forced Next's dynamic-rendering opt-in automatically, and this document
+// carries TIN/National ID plus a real expiry check that must re-run on
+// every request, not be served from a stale cached response.
+export const dynamic = 'force-dynamic'
+
 // GET — public, no auth. The recipient (an external landlord) has no login;
 // the unguessable token itself is the access control, not a session. Only
 // ever reads gpi_agreement_shares by exact token match — never lists them,

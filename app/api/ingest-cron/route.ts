@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { secureCompare } from '@/lib/secureCompare'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -9,11 +10,16 @@ const sb = createClient(
 // Triggered daily at 04:00 by Vercel Cron (vercel.json).
 // Manually: GET /api/ingest-cron with Authorization: Bearer <CRON_SECRET>
 
+// Vercel Hobby max — now loops every agency with its own ilist_export_url
+// configured (migration 20260711120400), so total duration scales with
+// agency count, not just one fixed import.
+export const maxDuration = 60
+
 const CRON_SECRET = process.env.CRON_SECRET
 
 function verifyCronAuth(req: NextRequest): boolean {
   if (!CRON_SECRET) return false
-  return (req.headers.get('authorization') ?? '') === `Bearer ${CRON_SECRET}`
+  return secureCompare(req.headers.get('authorization') ?? '', `Bearer ${CRON_SECRET}`)
 }
 
 function parseRow(headers: string[], cols: string[]): Record<string, string> {
@@ -69,6 +75,11 @@ async function fetchFromURL(url: string): Promise<string | null> {
   } catch { return null }
 }
 
+// Global bucket-root fallback (no per-agency folder convention exists for
+// this bucket today) — only ever used for the single legacy-fallback
+// target below, never looped across multiple configured agencies, since
+// that would mean two different agencies importing the same file into
+// their own agency_id.
 async function fetchFromStorage(): Promise<string | null> {
   const { data: files } = await sb.storage.from('ilist-exports').list('', { limit: 1, sortBy: { column: 'created_at', order: 'desc' } })
   if (!files?.length) return null
@@ -80,24 +91,43 @@ export async function GET(req: NextRequest) {
   if (!verifyCronAuth(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const startTime = Date.now()
-  let rawText: string | null = null
-  let source = 'none'
 
-  const exportURL = process.env.ILIST_EXPORT_URL
-  if (exportURL) { rawText = await fetchFromURL(exportURL); if (rawText) source = 'url' }
-  if (!rawText)  { rawText = await fetchFromStorage();      if (rawText) source = 'storage' }
+  const { data: agencies } = await sb.from('agencies').select('id, ilist_export_url').order('created_at')
+  const configured = (agencies ?? []).filter((a): a is { id: string; ilist_export_url: string } => !!a.ilist_export_url)
 
-  if (!rawText) return NextResponse.json({ ok: false, message: 'No data source. Set ILIST_EXPORT_URL or upload to ilist-exports bucket.' })
+  // Legacy fallback: no agency has opted into its own ilist_export_url yet,
+  // so behave exactly as before (single global env var -> the one agency
+  // that exists today) rather than breaking the working nightly cron. The
+  // moment any agency sets its own ilist_export_url, this fallback stops
+  // applying at all — per-agency config becomes authoritative, not "the
+  // first agency ever created."
+  const targets = configured.length > 0
+    ? configured.map(a => ({ id: a.id, url: a.ilist_export_url, useStorageFallback: false }))
+    : (process.env.ILIST_EXPORT_URL && agencies?.[0]
+        ? [{ id: agencies[0].id, url: process.env.ILIST_EXPORT_URL, useStorageFallback: true }]
+        : [])
 
-  const rows = parseTSV(rawText)
-  if (rows.length === 0) return NextResponse.json({ ok: false, message: 'File parsed but 0 valid rows.' })
+  if (targets.length === 0) {
+    return NextResponse.json({ ok: false, message: 'No agency has ilist_export_url configured, and ILIST_EXPORT_URL fallback is unset.' })
+  }
 
-  const { data: agency } = await sb.from('agencies').select('id').order('created_at').limit(1).single()
+  const results: Array<{ agency_id: string; ok: boolean; source?: string; rows?: number; message?: string }> = []
 
-  const upsertPayload = rows.map(r => ({ ...r, agency_id: agency?.id ?? null, updated_at: new Date().toISOString() }))
+  for (const target of targets) {
+    let rawText = await fetchFromURL(target.url)
+    let source = rawText ? 'url' : 'none'
+    if (!rawText && target.useStorageFallback) { rawText = await fetchFromStorage(); if (rawText) source = 'storage' }
 
-  const { error } = await sb.from('properties').upsert(upsertPayload, { onConflict: 'ilist_id', ignoreDuplicates: false })
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 })
+    if (!rawText) { results.push({ agency_id: target.id, ok: false, message: 'No data source reachable' }); continue }
 
-  return NextResponse.json({ ok: true, source, rows: rows.length, elapsed_ms: Date.now() - startTime })
+    const rows = parseTSV(rawText)
+    if (rows.length === 0) { results.push({ agency_id: target.id, ok: false, source, message: 'File parsed but 0 valid rows.' }); continue }
+
+    const upsertPayload = rows.map(r => ({ ...r, agency_id: target.id, updated_at: new Date().toISOString() }))
+    const { error } = await sb.from('properties').upsert(upsertPayload, { onConflict: 'ilist_id', ignoreDuplicates: false })
+
+    results.push({ agency_id: target.id, ok: !error, source, rows: rows.length, message: error?.message })
+  }
+
+  return NextResponse.json({ ok: results.every(r => r.ok), results, elapsed_ms: Date.now() - startTime })
 }

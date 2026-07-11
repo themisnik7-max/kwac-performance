@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient }              from '@supabase/supabase-js'
 import { getAuthedAgent }            from '@/lib/auth'
+import { secureCompare }             from '@/lib/secureCompare'
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
@@ -249,7 +250,7 @@ export async function POST(req: NextRequest) {
   const { demand_id } = await req.json()
   if (!demand_id) return NextResponse.json({ error: 'demand_id required' }, { status: 400 })
 
-  const isInternalCall = !!INTERNAL_API_SECRET && req.headers.get('x-internal-secret') === INTERNAL_API_SECRET
+  const isInternalCall = !!INTERNAL_API_SECRET && secureCompare(req.headers.get('x-internal-secret') ?? '', INTERNAL_API_SECRET)
   const caller = isInternalCall ? null : await getAuthedAgent(req)
   if (!isInternalCall && !caller) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 

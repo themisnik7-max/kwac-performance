@@ -25,6 +25,8 @@ export default function MonitorPage() {
   const [topRoutes,setTopRoutes]=useState([])
   const [kpis,setKpis]=useState(null)
   const [production,setProduction]=useState(null)
+  const [pending,setPending]=useState([])
+  const [pendingBusy,setPendingBusy]=useState(null)
   const [loading,setLoading]=useState(true)
   const [tab,setTab]=useState('compliance')
   const [filter,setFilter]=useState('all')
@@ -32,13 +34,31 @@ export default function MonitorPage() {
   const [toast,setToast]=useState('')
 
   const showToast=(msg)=>{setToast(msg);setTimeout(()=>setToast(''),4000)}
+  const loadPending=useCallback(()=>{
+    if(!isCeo) return
+    authedFetch('/api/agents/pending').then(r=>r.json()).then(d=>setPending(d.pending||[])).catch(()=>{})
+  },[isCeo])
   const load=useCallback(()=>{
     if(!isCeo) return
     setLoading(true)
     authedFetch('/api/monitor').then(r=>r.json()).then(d=>{setAgents(d.agents||[]);setTopRoutes(d.topRoutes||[]);setKpis(d.systemKPIs||null);setLoading(false)}).catch(()=>setLoading(false))
     authedFetch('/api/monitor/production').then(r=>r.json()).then(d=>setProduction(d)).catch(()=>{})
-  },[isCeo])
+    loadPending()
+  },[isCeo,loadPending])
   useEffect(()=>{load()},[load])
+
+  async function decidePending(agentId,action){
+    setPendingBusy(agentId)
+    try{
+      const res=await authedFetch('/api/agents/pending',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_id:agentId,action})})
+      const d=await res.json()
+      if(!res.ok){showToast('❌ '+(d.error||'Σφάλμα'));setPendingBusy(null);return}
+      showToast(action==='approve'?'✅ Ο λογαριασμός εγκρίθηκε.':'🗑️ Το αίτημα απορρίφθηκε.')
+      setPending(prev=>prev.filter(p=>p.id!==agentId))
+      if(action==='approve') load()
+    }catch{showToast('Σφάλμα σύνδεσης.')}
+    setPendingBusy(null)
+  }
 
   if(!isCeo) return <Shell><div style={{padding:'4rem',textAlign:'center'}}><div style={{fontSize:48,marginBottom:16}}>🔒</div><div style={{fontSize:16,color:'#888'}}>Διαθέσιμο μόνο σε CEO / Admin.</div></div></Shell>
 
@@ -74,8 +94,8 @@ export default function MonitorPage() {
         </div>
         {total>0&&<div style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,padding:'1rem 1.25rem',marginBottom:20}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{fontSize:13,fontWeight:500}}>Μετρησιμότητα αυτής της εβδομάδας</span><span style={{fontSize:13,color:'#888'}}>{submitted}/{total}</span></div><div style={{background:'#f0f0f0',borderRadius:100,height:10,overflow:'hidden'}}><div style={{height:'100%',borderRadius:100,background:submitted===total?'#3B6D11':submitted>=total*0.7?'#BA7517':'#CC2229',width:pct(submitted,total)+'%',transition:'width .5s ease'}} /></div></div>}
         <div style={{display:'flex',gap:6,marginBottom:16}}>
-          {[{key:'compliance',label:'📋 Compliance'},{key:'activity',label:'🔥 Δραστηριότητα'},{key:'kpis',label:'📊 System KPIs'},{key:'production',label:'🏗️ Παραγωγή'}].map(t=>(
-            <button key={t.key} onClick={()=>setTab(t.key)} style={{padding:'7px 16px',borderRadius:8,border:'none',fontSize:13,fontWeight:500,cursor:'pointer',background:tab===t.key?'#1a1a1a':'#fff',color:tab===t.key?'#fff':'#666',outline:tab===t.key?'none':'0.5px solid #e8e8e8'}}>{t.label}</button>
+          {[{key:'compliance',label:'📋 Compliance'},{key:'activity',label:'🔥 Δραστηριότητα'},{key:'kpis',label:'📊 System KPIs'},{key:'production',label:'🏗️ Παραγωγή'},{key:'pending',label:`🔓 Εγκρίσεις${pending.length?` (${pending.length})`:''}`}].map(t=>(
+            <button key={t.key} onClick={()=>setTab(t.key)} style={{padding:'7px 16px',borderRadius:8,border:'none',fontSize:13,fontWeight:500,cursor:'pointer',background:tab===t.key?'#1a1a1a':'#fff',color:tab===t.key?'#fff':(t.key==='pending'&&pending.length?'#CC2229':'#666'),outline:tab===t.key?'none':'0.5px solid #e8e8e8'}}>{t.label}</button>
           ))}
         </div>
 
@@ -224,6 +244,33 @@ export default function MonitorPage() {
             </div>
           )
         })()}
+
+        {tab==='pending'&&(
+          <div style={{background:'#fff',border:'0.5px solid #e8e8e8',borderRadius:12,overflow:'hidden'}}>
+            {pending.length===0?(
+              <div style={{padding:'3rem',textAlign:'center',color:'#bbb',fontSize:13}}>Δεν υπάρχουν εκκρεμείς εγγραφές.</div>
+            ):(
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+                <thead><tr style={{background:'#F8F8F7',borderBottom:'1px solid #F0F0F0'}}>{['Μεσίτης','Τηλέφωνο','Αίτημα','Ενέργειες'].map(h=><th key={h} style={{textAlign:'left',padding:'10px 12px',fontWeight:500,color:'#888',fontSize:12}}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {pending.map(p=>(
+                    <tr key={p.id} style={{borderBottom:'0.5px solid #F8F8F8'}}>
+                      <td style={{padding:'12px'}}><div style={{fontWeight:500}}>{p.full_name||'—'}</div><div style={{fontSize:11,color:'#aaa'}}>{p.email}</div></td>
+                      <td style={{padding:'12px',color:'#888'}}>{p.phone||'—'}</td>
+                      <td style={{padding:'12px',color:'#888'}}>{relativeDate(p.joined_at)}</td>
+                      <td style={{padding:'12px'}}>
+                        <div style={{display:'flex',gap:8}}>
+                          <button onClick={()=>decidePending(p.id,'approve')} disabled={pendingBusy===p.id} style={{padding:'6px 14px',borderRadius:8,fontSize:12,fontWeight:500,border:'none',cursor:pendingBusy===p.id?'default':'pointer',background:'#EAF3DE',color:'#3B6D11',opacity:pendingBusy===p.id?0.6:1}}>✓ Έγκριση</button>
+                          <button onClick={()=>decidePending(p.id,'reject')} disabled={pendingBusy===p.id} style={{padding:'6px 14px',borderRadius:8,fontSize:12,fontWeight:500,border:'none',cursor:pendingBusy===p.id?'default':'pointer',background:'#FCEBEB',color:'#A32D2D',opacity:pendingBusy===p.id?0.6:1}}>✗ Απόρριψη</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
     </Shell>
   )

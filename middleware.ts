@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// NOTE: this check is global (`.limit(1)`, not scoped to the visitor's own
+// agency_id) — a "first agency in the system" single-tenant shortcut, same
+// bug class fixed elsewhere this session. Low priority to fix here
+// specifically because (a) middleware has no session/agency awareness
+// without decoding the token itself — a bigger change than this file's
+// current job, and (b) the real enforcement now lives in
+// lib/auth.ts's getAuthedAgent (properly per-agency, covers every API
+// route) — this middleware redirect is UX-only (page navigation), not the
+// actual access-control boundary anymore.
 const TTL_MS = 5 * 60 * 1000
 let ksCache: { active: boolean; expiresAt: number } | null = null
 

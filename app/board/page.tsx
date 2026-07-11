@@ -16,7 +16,7 @@ export default function BoardPage() {
   const supabase = createClient()
 
   useEffect(() => {
-    supabase.from('open_houses').select('*, agents(full_name)').order('date', { ascending: true }).then(({ data }) => setOpenHouses(data || []))
+    supabase.from('open_houses').select('*, agents(full_name)').order('date', { ascending: true }).limit(200).then(({ data }) => setOpenHouses(data || []))
     supabase.from('announcements').select('*, agents(full_name)').order('created_at', { ascending: false }).limit(20).then(({ data }) => {
       setAnnouncements(data || [])
       const ohIds = (data || []).map(a => a.open_house_id).filter(Boolean)

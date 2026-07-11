@@ -36,34 +36,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Sprint not found' }, { status: 404 })
   }
 
-  const { data: existingEntry } = await sb.from('sprint_entries').select('*')
-    .eq('sprint_id', sprint_id).eq('agent_id', caller.id).maybeSingle()
-
-  const delta = value - (existingEntry?.[field] || 0)
-
-  const { error: entryErr } = await sb.from('sprint_entries').upsert({
-    sprint_id, agent_id: caller.id, agency_id: caller.agency_id,
-    calls: existingEntry?.calls || 0, leads: existingEntry?.leads || 0, appointments: existingEntry?.appointments || 0,
-    [field]: value, updated_at: new Date().toISOString(),
-  }, { onConflict: 'sprint_id,agent_id' })
-  if (entryErr) return NextResponse.json({ error: entryErr.message }, { status: 500 })
-
-  if (delta !== 0) {
-    const { week, year } = getWeekInfo(new Date())
-    const { data: existingWeek } = await sb.from('weekly_submissions').select('*')
-      .eq('agent_id', caller.id).eq('week_number', week).eq('year', year).maybeSingle()
-
-    const newFieldValue = (existingWeek?.[mapping.column] || 0) + delta
-    const newXp = (existingWeek?.xp_earned || 0) + delta * mapping.xpWeight
-
-    const { error: weekErr } = await sb.from('weekly_submissions').upsert({
-      agent_id: caller.id, agency_id: caller.agency_id, week_number: week, year,
-      ...(existingWeek || {}), id: existingWeek?.id, // preserve other fields already entered this week
-      [mapping.column]: newFieldValue, xp_earned: newXp,
-      is_editable: existingWeek?.is_editable ?? true, updated_at: new Date().toISOString(),
-    }, { onConflict: 'agent_id,week_number,year' })
-    if (weekErr) return NextResponse.json({ error: weekErr.message }, { status: 500 })
-  }
+  // Row-locked, single-transaction RPC — see migration
+  // 20260711120500_atomic_sprint_entry_fold.sql. Replaces a JS
+  // read-modify-write that lost updates under concurrent requests (double
+  // tap, two devices, two fields updated close together).
+  const { week, year } = getWeekInfo(new Date())
+  const { error } = await sb.rpc('upsert_sprint_entry_and_fold', {
+    p_sprint_id: sprint_id, p_agent_id: caller.id, p_agency_id: caller.agency_id,
+    p_field: field, p_value: value,
+    p_week_column: mapping.column, p_xp_weight: mapping.xpWeight,
+    p_week_number: week, p_year: year,
+  })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   return NextResponse.json({ ok: true })
 }

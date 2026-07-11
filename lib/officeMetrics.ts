@@ -49,32 +49,24 @@ export async function getOfficeActivityMetrics(sb: SupabaseClient, agencyId: str
     byAgent.set(a.id, { agent_id: a.id, full_name: a.full_name, email: a.email, team: a.team, role: a.role, ...emptyTotals() })
   }
 
-  const { data: submissions } = await sb
-    .from('weekly_submissions')
-    .select('agent_id, cold_calls, meet2_seller, excl_listing_sale, simple_listing_sale, excl_rental_high, excl_rental_low, simple_rental, offer_buyer, offer_tenant, deposit_office, deposit_client, contract_seller, contract_buyer, xp_earned')
-    .eq('agency_id', agencyId)
-  for (const s of submissions || []) {
-    const row = byAgent.get(s.agent_id)
+  // Aggregated server-side (migration 20260711150000) instead of fetching
+  // every weekly_submissions/demand_profiles/showings row this agency has
+  // ever produced and reducing it here — this used to be O(all rows ever),
+  // on every page load, with no cache.
+  const { data: totals } = await sb.rpc('get_agent_activity_totals', { p_agency_id: agencyId })
+  for (const t of totals || []) {
+    const row = byAgent.get(t.agent_id)
     if (!row) continue
-    row.calls += s.cold_calls || 0
-    row.second_appointments += s.meet2_seller || 0
-    row.mandates += (s.excl_listing_sale || 0) + (s.simple_listing_sale || 0) + (s.excl_rental_high || 0) + (s.excl_rental_low || 0) + (s.simple_rental || 0)
-    row.offers += (s.offer_buyer || 0) + (s.offer_tenant || 0)
-    row.deposits += (s.deposit_office || 0) + (s.deposit_client || 0)
-    row.closings += (s.contract_seller || 0) + (s.contract_buyer || 0)
-    row.xp_total += s.xp_earned || 0
-    row.weeks_submitted += 1
-  }
-
-  const { data: demandRows } = await sb.from('demand_profiles').select('agent_id').eq('agency_id', agencyId)
-  for (const d of demandRows || []) { const row = byAgent.get(d.agent_id); if (row) row.demand += 1 }
-
-  // showings has no agency_id column of its own — filter by this agency's
-  // agent ids directly rather than assuming a resolvable FK through property_id.
-  const agentIds = Array.from(byAgent.keys())
-  if (agentIds.length) {
-    const { data: showingRows } = await sb.from('showings').select('agent_id').in('agent_id', agentIds)
-    for (const s of showingRows || []) { const row = byAgent.get(s.agent_id); if (row) row.showings += 1 }
+    row.calls = Number(t.calls)
+    row.second_appointments = Number(t.second_appointments)
+    row.mandates = Number(t.mandates)
+    row.offers = Number(t.offers)
+    row.deposits = Number(t.deposits)
+    row.closings = Number(t.closings)
+    row.weeks_submitted = Number(t.weeks_submitted)
+    row.xp_total = Number(t.xp_total)
+    row.demand = Number(t.demand)
+    row.showings = Number(t.showings)
   }
 
   const agents = Array.from(byAgent.values())
@@ -113,19 +105,19 @@ export type OfficeConversionRates = {
 // funnel reverse-engineers one agent's target into weekly actions from
 // their own real conversion rates; this does the same at office scale.
 export async function getOfficeConversionRates(sb: SupabaseClient, agencyId: string): Promise<OfficeConversionRates> {
-  const { data: submissions } = await sb
-    .from('weekly_submissions')
-    .select('cold_calls, follow_up, meet1_seller_live, meet1_seller_phone, meet1_buyer_live, meet1_buyer_phone, meet1_tenant_live, meet1_tenant_phone, meet2_seller, excl_listing_sale, simple_listing_sale, excl_rental_high, excl_rental_low, simple_rental, contract_seller, contract_buyer')
-    .eq('agency_id', agencyId)
+  // Same SQL-side SUM as getOfficeActivityMetrics above (migration
+  // 20260711150000) instead of fetching every weekly_submissions row and
+  // reducing five separate times in JS.
+  const { data } = await sb.rpc('get_office_conversion_totals', { p_agency_id: agencyId }).maybeSingle() as
+    { data: { tot_calls: number; tot_appt1: number; tot_appt2: number; tot_list: number; tot_deals: number; weeks_of_data: number } | null }
+  const weeksOfData = Number(data?.weeks_of_data ?? 0)
+  if (weeksOfData === 0) return { cr_call_appt1: null, cr_appt1_appt2: null, cr_appt2_listing: null, cr_listing_deal: null, weeks_of_data: 0 }
 
-  const rows = submissions || []
-  if (rows.length === 0) return { cr_call_appt1: null, cr_appt1_appt2: null, cr_appt2_listing: null, cr_listing_deal: null, weeks_of_data: 0 }
-
-  const totCalls = rows.reduce((s, r) => s + (r.cold_calls || 0) + (r.follow_up || 0), 0)
-  const totAppt1 = rows.reduce((s, r) => s + (r.meet1_seller_live || 0) + (r.meet1_seller_phone || 0) + (r.meet1_buyer_live || 0) + (r.meet1_buyer_phone || 0) + (r.meet1_tenant_live || 0) + (r.meet1_tenant_phone || 0), 0)
-  const totAppt2 = rows.reduce((s, r) => s + (r.meet2_seller || 0), 0)
-  const totList  = rows.reduce((s, r) => s + (r.excl_listing_sale || 0) + (r.simple_listing_sale || 0) + (r.excl_rental_high || 0) + (r.excl_rental_low || 0) + (r.simple_rental || 0), 0)
-  const totDeals = rows.reduce((s, r) => s + (r.contract_seller || 0) + (r.contract_buyer || 0), 0)
+  const totCalls = Number(data!.tot_calls)
+  const totAppt1 = Number(data!.tot_appt1)
+  const totAppt2 = Number(data!.tot_appt2)
+  const totList  = Number(data!.tot_list)
+  const totDeals = Number(data!.tot_deals)
 
   // Clamped to [1,95] — a real funnel stage can't convert above ~100%, but
   // aggregating many agents' independently-timed weekly counters can produce
@@ -139,6 +131,6 @@ export async function getOfficeConversionRates(sb: SupabaseClient, agencyId: str
     cr_appt1_appt2: rate(totAppt2, totAppt1),
     cr_appt2_listing: rate(totList, totAppt2),
     cr_listing_deal: rate(totDeals, totList),
-    weeks_of_data: rows.length,
+    weeks_of_data: weeksOfData,
   }
 }

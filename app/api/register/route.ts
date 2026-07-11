@@ -3,6 +3,7 @@
 
 import { createClient } from '@supabase/supabase-js'
 import { NextRequest, NextResponse } from 'next/server'
+import { checkRateLimit } from '@/lib/rateLimit'
 
 const sb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -16,6 +17,14 @@ function initialsFrom(fullName: string): string {
 }
 
 export async function POST(req: NextRequest) {
+  // Pre-auth, public, and (per this audit) previously the only route in the
+  // app with neither a session nor any rate limit — unlimited signup
+  // attempts / email-existence enumeration via the 409 branch below. Keyed
+  // on IP since there's no caller identity yet.
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || 'unknown'
+  const withinRate = await checkRateLimit(sb, `register:${ip}`, 3600, 5)
+  if (!withinRate) return NextResponse.json({ error: 'Πολλές προσπάθειες εγγραφής — δοκίμασε ξανά αργότερα.' }, { status: 429 })
+
   const body = await req.json()
   const email = (body.email ?? '').trim()
   const password = body.password
@@ -64,7 +73,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: authError?.message || 'Σφάλμα δημιουργίας χρήστη.' }, { status: 500 })
   }
 
-  // 4. Insert agent record
+  // 4. Insert agent record. Agencies with require_approval=true get created
+  // inactive — getAuthedAgent (lib/auth.ts) rejects inactive agents on every
+  // API route, so this is real enforcement, not just a UI flag. A CEO/Admin
+  // must approve via /api/agents/pending before the account can do anything.
+  const pendingApproval = agency.require_approval === true
   const { error: agentError } = await sb.from('agents').insert({
     id:         authData.user.id, // match auth.users.id
     email:      email.toLowerCase(),
@@ -73,7 +86,7 @@ export async function POST(req: NextRequest) {
     phone:      phone || null,
     role:       'agent',
     agency_id:  agency.id,
-    is_active:  true,
+    is_active:  !pendingApproval,
     joined_at:  new Date().toISOString(),
   })
 
@@ -85,7 +98,10 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ok: true,
-    message: `Καλωσήρθες στο KWAC OS, ${full_name.split(' ')[0]}! Συνδέσου τώρα.`,
+    pending_approval: pendingApproval,
+    message: pendingApproval
+      ? `Ο λογαριασμός σου δημιουργήθηκε και περιμένει έγκριση από τον διαχειριστή. Θα ενημερωθείς όταν ενεργοποιηθεί.`
+      : `Καλωσήρθες στο KWAC OS, ${full_name.split(' ')[0]}! Συνδέσου τώρα.`,
     agency_name: agency.name,
   })
 }

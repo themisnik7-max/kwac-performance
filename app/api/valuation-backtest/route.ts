@@ -8,6 +8,12 @@ const sb = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
+// Vercel Hobby max — nested comp-pool loop over every sold property scales
+// with historical row count; claim the platform ceiling rather than the
+// unconfigured default (see app/api/market-data/import-registry/route.ts
+// for the same pattern).
+export const maxDuration = 60
+
 const LOOKBACK_MS = 3 * 365 * 24 * 60 * 60 * 1000 // matches the live route's comp window
 const MIN_COMPS = 3
 

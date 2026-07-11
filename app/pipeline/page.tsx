@@ -48,7 +48,7 @@ export default function PipelinePage() {
 
   async function fetchProperties() {
     setLoading(true)
-    const { data } = await supabase.from('pipeline_properties').select('*').order('listed_at', { ascending: false })
+    const { data } = await supabase.from('pipeline_properties').select('*').order('listed_at', { ascending: false }).limit(1000)
     setProperties(data || [])
     setLoading(false)
   }

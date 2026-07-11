@@ -6,6 +6,12 @@ import { buildFeatureVector, FEATURE_NAMES, PricingInputRow } from '@/lib/pricin
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
 
+// Vercel Hobby max — see app/api/market-data/import-registry/route.ts for
+// the same pattern. Training over up to 25,000 registry rows + a per-area
+// RPC loop for feedback can run long as the registry grows; this at least
+// claims the platform ceiling instead of the unconfigured default.
+export const maxDuration = 60
+
 type TrainRow = { input: PricingInputRow; ppsqm: number; weight: number; isRealSale: boolean }
 
 // Trains the small neural-net pricing model (lib/miniNet.ts). By explicit
@@ -115,14 +121,24 @@ export async function POST(req: NextRequest) {
   const maePct = errors.length ? Math.round(median(errors) * 1000) / 10 : null
   const r2 = errors.length ? computeR2(actuals, predicted) : null
 
-  await sb.from('pricing_model_runs').update({ is_active: false }).eq('agency_id', caller.agency_id).eq('is_active', true)
-
+  // Insert the new run as active FIRST, then deactivate the old one(s) —
+  // not the other way around. The previous order (deactivate, then insert)
+  // left a window where a timeout/crash between the two statements meant
+  // zero active runs for the agency: runValuation()'s modelRun lookup
+  // would then silently return null and the NN signal drops out of every
+  // future valuation until someone happens to retrain successfully. This
+  // order's worst case on a mid-write failure is briefly having two
+  // "active" rows instead of zero — harmless, since runValuation() already
+  // takes the single most recent one (order by trained_at desc limit 1).
   const { data: inserted, error: insertErr } = await sb.from('pricing_model_runs').insert({
     agency_id: caller.agency_id, seed, feature_names: FEATURE_NAMES, model_json: net.toJSON(),
     train_sample_size: trainReal.length, holdout_sample_size: holdout.length,
     feedback_sample_size: feedbackTrainRows.length, holdout_mae_pct: maePct, holdout_r2: r2, is_active: true,
   }).select('id, trained_at').single()
   if (insertErr) return NextResponse.json({ error: `Αποτυχία αποθήκευσης μοντέλου: ${insertErr.message}` }, { status: 500 })
+
+  await sb.from('pricing_model_runs').update({ is_active: false })
+    .eq('agency_id', caller.agency_id).eq('is_active', true).neq('id', inserted.id)
 
   return NextResponse.json({
     success: true, run_id: inserted.id, trained_at: inserted.trained_at,

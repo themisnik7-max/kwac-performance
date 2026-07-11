@@ -172,7 +172,7 @@ export default function MarketingKitPanel({ prop, user }: Props) {
       const res = await authedFetch('/api/marketing/send-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prop, agent_id: user.id }),
+        body: JSON.stringify({ property_id: prop.id, agent_id: user.id }),
       })
       const json = await res.json()
       if (!res.ok) {

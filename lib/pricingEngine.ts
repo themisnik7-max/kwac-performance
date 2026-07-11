@@ -65,6 +65,7 @@ export async function runValuation(sb: SupabaseClient, propertyId: string, agenc
     .select('address, area, sqm, price_asking, price_final, days_on_market, condition, listed_at')
     .eq('deal_type', 'sale').eq('area', prop.area).eq('agency_id', agencyId).eq('status', 'sold')
     .not('price_final', 'is', null).not('days_on_market', 'is', null)
+    .order('listed_at', { ascending: false }).limit(500)
 
   const saleProbability = estimateSaleProbability(ppsqm ?? avgPpsqm, closedComps || [])
 
@@ -169,38 +170,40 @@ export async function runValuation(sb: SupabaseClient, propertyId: string, agenc
   }
   const reasoning = lines.join('\n')
 
-  const { error: valuationErr } = await sb.from('meeting_valuations').upsert({
-    property_id: propertyId, agency_id: agencyId,
-    ai_min: min, ai_max: max, ai_recommended: recommended, ai_price_per_sqm: ppsqm,
-    ai_reasoning: reasoning, comparables: comps.slice(0, 5), top_producers: topProducers?.slice(0, 3) || [],
-    confidence_score: conf, blended_recommended: blended, blended_confidence: blendedConf,
-    feedback_count: validFeedback.length, last_feedback_sync: new Date().toISOString(),
-    sale_probability: saleProbability.probability, sale_probability_sample_size: saleProbability.sample_size,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: 'property_id' })
-  if (valuationErr) {
-    console.error('[pricingEngine] meeting_valuations upsert failed', valuationErr)
-    return { success: false, error: `Αποτυχία αποθήκευσης εκτίμησης: ${valuationErr.message}` }
-  }
-
-  const { error: logErr } = await sb.from('valuation_calibration_log').insert({
-    agency_id: agencyId, property_id: propertyId,
-    comp_recommended: recommended, comp_confidence: conf, comp_count: comps.length,
-    agent_consensus: agentConsensus, feedback_count: validFeedback.length,
-    blend_comp_weight: blendCompWeight, blend_feedback_weight: blendFeedbackWeight,
-    blend_nn_weight: nnRecommended != null ? nnWeight : null, nn_recommended: nnRecommended,
-    pricing_model_run_id: modelRun?.id ?? null,
-    producer_weight_map: producerWeightMap,
-    blended_recommended: blended, blended_confidence: blendedConf,
+  // Single advisory-locked, transactional RPC (migration
+  // 20260711120600_atomic_valuation_write.sql) instead of 4 independent
+  // writes — runValuation() is called both automatically (any agent moving
+  // their property to for_appraisal) and manually (admin re-trigger, no
+  // existence check), so two overlapping calls for the same property used
+  // to interleave: last upsert silently won, and both inserted their own
+  // valuation_calibration_log row, permanently duplicating an audit trail
+  // CLAUDE.md mandates keeping forever. The lock is keyed on propertyId and
+  // auto-releases when the RPC's implicit transaction commits.
+  const { error: writeErr } = await sb.rpc('write_valuation_result', {
+    p_property_id: propertyId,
+    p_valuation: {
+      agency_id: agencyId,
+      ai_min: min, ai_max: max, ai_recommended: recommended, ai_price_per_sqm: ppsqm,
+      ai_reasoning: reasoning, comparables: comps.slice(0, 5), top_producers: topProducers?.slice(0, 3) || [],
+      confidence_score: conf, blended_recommended: blended, blended_confidence: blendedConf,
+      feedback_count: validFeedback.length,
+      sale_probability: saleProbability.probability, sale_probability_sample_size: saleProbability.sample_size,
+    },
+    p_calibration: {
+      agency_id: agencyId,
+      comp_recommended: recommended, comp_confidence: conf, comp_count: comps.length,
+      agent_consensus: agentConsensus, feedback_count: validFeedback.length,
+      blend_comp_weight: blendCompWeight, blend_feedback_weight: blendFeedbackWeight,
+      blend_nn_weight: nnRecommended != null ? nnWeight : null, nn_recommended: nnRecommended,
+      pricing_model_run_id: modelRun?.id ?? null,
+      producer_weight_map: producerWeightMap,
+      blended_recommended: blended, blended_confidence: blendedConf,
+    },
   })
-  if (logErr) console.error('[pricingEngine] calibration log insert failed (non-fatal)', logErr)
-
-  if (validFeedback.length > 0) {
-    await sb.from('meeting_comments').update({ feedback_processed: true })
-      .eq('property_id', propertyId).not('agent_estimate', 'is', null)
+  if (writeErr) {
+    console.error('[pricingEngine] write_valuation_result failed', writeErr)
+    return { success: false, error: `Αποτυχία αποθήκευσης εκτίμησης: ${writeErr.message}` }
   }
-
-  await sb.from('meeting_properties').update({ status: 'estimated' }).eq('id', propertyId)
 
   return {
     success: true,

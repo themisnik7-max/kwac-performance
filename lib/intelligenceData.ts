@@ -12,6 +12,13 @@ const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env
 export type Insight = { type: 'warning' | 'opportunity' | 'insight'; icon: string; title: string; text: string }
 
 export async function getIntelligenceData(agency_id: string) {
+  // No .limit() here on purpose — this computes real aggregate stats
+  // (totals, averages, concentration risk) across the whole agency, so
+  // truncating the row set would silently make the dashboard's numbers
+  // wrong, not just slow. Fine at today's row counts; if this ever becomes
+  // a real bottleneck, the fix is pushing the aggregation into SQL (same
+  // pattern as lib/officeMetrics.ts's get_agent_activity_totals RPC), not
+  // a naive row cap.
   const { data: rows } = await supabase
     .from('properties')
     .select('agent_name,area,price_asking,price_final,price_sqm_final,sqm,property_type,deal_type')

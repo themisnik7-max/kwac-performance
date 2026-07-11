@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthedAgent }            from '@/lib/auth'
+import { safeExtension }             from '@/lib/uploads'
 import { createClient }              from '@supabase/supabase-js'
 
 const db     = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
     if (file.size > MAX_MB * 1024 * 1024) {
       errors.push(`${file.name}: υπερβαίνει ${MAX_MB}MB`); continue
     }
-    const ext  = file.name.split('.').pop()?.toLowerCase() ?? 'pdf'
+    const ext  = safeExtension(file.name, 'pdf')
     const path = `${caller.agency_id}/${propertyId}/${category}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
 
     const { error: upErr } = await db.storage
@@ -62,8 +63,13 @@ export async function POST(req: NextRequest) {
 
     if (upErr) { errors.push(`${file.name}: ${upErr.message}`); continue }
 
-    // Signed URL (1 year) — private bucket
-    const { data: signed } = await db.storage.from(BUCKET).createSignedUrl(path, 31536000)
+    // Signed URL, 1hr — matches GET's regeneration TTL below. This value is
+    // only ever shown once, in the immediate upload response; every
+    // subsequent fetch regenerates a fresh one, so there's no reason for it
+    // to outlive that (used to be a 1-year TTL sitting in the DB doing
+    // nothing but extending how long a leaked URL — email, logs, browser
+    // history — would stay valid).
+    const { data: signed } = await db.storage.from(BUCKET).createSignedUrl(path, 3600)
     const url = signed?.signedUrl ?? ''
 
     const { data: row, error: dbErr } = await db.from('property_documents').insert({
