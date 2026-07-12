@@ -7,6 +7,7 @@ import { PropertyPhotoUpload } from '@/components/PropertyPhotoUpload'
 import { PropertyDocUpload } from '@/components/PropertyDocUpload'
 import { contactName } from '@/lib/contacts'
 import { useApp } from '@/lib/AppContext'
+import { authedFetch } from '@/lib/authedFetch'
 
 const C = {red:'#CC2229',dark:'#1A1A1A',muted:'#6B7280',border:'#EBEBEB',subtle:'#F7F7F7',white:'#FFFFFF',green:'#16A34A',greenLight:'#F0FDF4',blue:'#2563EB'}
 
@@ -82,8 +83,14 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
     if(!user || !id) return
     ;(async () => {
       setLoading(true)
-      const { data: row, error } = await supabase.from('meeting_properties').select('*').eq('id', id).single()
-      if (error || !row) { setErr('Δεν βρέθηκε το ακίνητο.'); setLoading(false); return }
+      // Server-side route, not a direct query — it redacts owner PII for
+      // anyone who isn't the uploading agent or admin/ceo (RLS alone can
+      // hide the row from a non-owner once it's pending, but can't hide
+      // just the owner_name/phone/email columns within a row it does
+      // allow through once the listing is no longer pending).
+      const res = await authedFetch(`/api/properties/${id}`)
+      const { property: row, error } = await res.json()
+      if (!res.ok || !row) { setErr(error || 'Δεν βρέθηκε το ακίνητο.'); setLoading(false); return }
       setProp(row)
 
       if (row.owner_contact_id) {

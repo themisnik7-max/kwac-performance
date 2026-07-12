@@ -56,7 +56,14 @@ export default function GpiListPage() {
   // message instead of a raw error banner.
   useEffect(() => { if (!appLoading && hasAccess) load() }, [appLoading, hasAccess])
 
-  if (!appLoading && !hasAccess) {
+  // appLoading must gate first: while useApp() is still resolving the
+  // agent row, hasAccess is only provisionally false, and falling through
+  // to the real page below (rather than a neutral loading state) would
+  // flash the full GPI UI — including the client-creation form — before
+  // access is actually known. The real boundary stays server-side
+  // (hasGpiFeatureAccess in every /api/gpi/** route) either way.
+  if (appLoading) return <Shell><div style={{ padding: '3rem', textAlign: 'center', color: C.muted, fontSize: 13 }}>Φόρτωση...</div></Shell>
+  if (!hasAccess) {
     return <Shell><LockedFeature title="Το GPI είναι κλειδωμένο" message="Αυτό το feature είναι διαθέσιμο μόνο στον ορισμένο λογαριασμό GPI της υπηρεσίας, ή σε CEO/Admin." /></Shell>
   }
 

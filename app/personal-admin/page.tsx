@@ -6,6 +6,7 @@ import { createClient }        from '@supabase/supabase-js'
 import { VoiceMemoButton }     from '@/components/VoiceMemoButton'
 import { contactName }         from '@/lib/contacts'
 import { useApp }              from '@/lib/AppContext'
+import { authedFetch }         from '@/lib/authedFetch'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -503,35 +504,25 @@ export default function PersonalAdminPage() {
   const [showNew,    setShowNew]    = useState(false)
   const [search,     setSearch]     = useState('')
 
-  // Agency-wide now, not just "mine" — RLS already scopes meeting_properties
-  // this exact way (own rows regardless of status, or any agency row once
-  // it's past 'pending', see migration 021), so no policy change was needed
-  // there. demand_profiles had no agency-wide SELECT policy at all before
-  // migration 20260712100000 — a plain agent literally could not see a
-  // colleague's row until that policy was added. Edit rights stay
-  // owner/admin-only in both cases (unchanged).
+  // Agency-wide now, not just "mine" — but owner/client PII (name, phone,
+  // email) for a colleague's row must NOT come along for the ride, since
+  // that's exactly what a competing agent could use to poach a lead. RLS
+  // can hide whole rows but not individual columns within a row it already
+  // allows, so this goes through two API routes that fetch server-side and
+  // redact PII for anything the caller doesn't own (see lib/properties.ts)
+  // instead of querying meeting_properties/demand_profiles directly.
   const load = useCallback(async () => {
     if (appLoading) return
     setLoading(true); setLoadError(null)
     const [propsRes, demsRes] = await Promise.all([
-      supabase.from('meeting_properties')
-        // meeting_properties has two FKs into agents (agent_id and
-        // first_registered_by) — the bare `agents(full_name)` embed used
-        // pre-2026-07-12 was ambiguous and PostgREST rejected the whole
-        // query. `agents!agent_id` pins it to the uploader FK by column
-        // name, which needs no knowledge of the actual constraint name.
-        .select('id,ilist_id,title,owner_name,owner_phone,owner_email,owner_contact_id,contacts(id,full_name,first_name,last_name,phone,email),transaction_type,address,area,floor,sqm,rooms,condition,year_built,year_renovated,balcony,parking,security_door,asking_price,seller_motivation,ai_summary,status,voice_note_ids,created_at,updated_at,agent_id,agents!agent_id(full_name)')
-        .order('created_at', { ascending: false })
-        .limit(200),
-      supabase.from('demand_profiles')
-        .select('id,client_name,client_phone,client_email,transaction_type,property_type,budget_eur,size_min,size_max,floor_min,floor_max,areas_preferred,must_have,nice_to_have,condition_req,ai_summary,status,updated_at,voice_note_ids,agent_id,agents!agent_id(full_name)')
-        .order('updated_at', { ascending: false })
-        .limit(200),
+      authedFetch('/api/personal-admin/properties'),
+      authedFetch('/api/personal-admin/demand'),
     ])
-    if (propsRes.error) setLoadError(`Ακίνητα: ${propsRes.error.message}`)
-    if (demsRes.error)  setLoadError(e => e ? e + ' | ' + demsRes.error!.message : `Ζητήσεις: ${demsRes.error!.message}`)
-    setProperties((propsRes.data ?? []) as unknown as PropertyRow[])
-    setDemands((demsRes.data ?? []) as unknown as DemandRow[])
+    const [propsData, demsData] = await Promise.all([propsRes.json(), demsRes.json()])
+    if (!propsRes.ok) setLoadError(`Ακίνητα: ${propsData.error}`)
+    if (!demsRes.ok)  setLoadError(e => e ? e + ' | ' + demsData.error : `Ζητήσεις: ${demsData.error}`)
+    setProperties((propsData.properties ?? []) as PropertyRow[])
+    setDemands((demsData.demand ?? []) as DemandRow[])
     setLoading(false)
   }, [appLoading])
 

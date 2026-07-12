@@ -344,12 +344,14 @@ export default function IntelligencePage() {
   const isCeo = role === 'ceo'
 
   // Locked for regular agents by product decision — Intelligence OP is
-  // admin/CEO-only now, same treatment as GPI. `loading` guard avoids a
-  // flash of the locked state while useApp() is still resolving the real
-  // role. Server-side, CeoIntelligence's own data route
-  // (/api/monitor/production) is already admin-gated — this just stops a
-  // regular agent from landing on a half-working page instead of a clear one.
-  if (!loading && !isCeo) {
+  // admin/CEO-only now, same treatment as GPI. `loading` must gate FIRST:
+  // while useApp() is still resolving the real role, isCeo is only
+  // provisionally false, and falling through to the real page below
+  // (instead of a neutral loading state) would flash the full CEO view
+  // before access is actually known. Server-side, CeoIntelligence's own
+  // data route (/api/monitor/production) is already admin-gated regardless.
+  if (loading) return <Shell><div style={{ padding: '3rem', textAlign: 'center', color: '#888', fontSize: 13 }}>Φόρτωση...</div></Shell>
+  if (!isCeo) {
     return <Shell><LockedFeature title="Το Intelligence OP είναι κλειδωμένο" message="Αυτή η προβολή είναι διαθέσιμη μόνο σε CEO/Admin." /></Shell>
   }
 

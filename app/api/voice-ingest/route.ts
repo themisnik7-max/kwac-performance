@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
         const ownerName = (fields.owner_name as string) || null
         const { first_name, last_name } = splitName(ownerName || '')
         const { data: created, error: contactErr } = await db.from('contacts').insert({
-          agency_id: agencyId, full_name: ownerName,
+          agency_id: agencyId, agent_id: caller.id, full_name: ownerName,
           first_name: first_name || null, last_name: last_name || null,
           phone, email: (fields.owner_email as string) ?? null, type: 'contact',
         }).select('id').single()
