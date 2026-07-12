@@ -228,11 +228,26 @@ function NewPropertyForm({ onSaved, onCancel }: { onSaved: () => void; onCancel:
 
 // ── Properties + owners table ────────────────────────────────────
 
-function PropertiesTable({ rows, myAgentId }: { rows: PropertyRow[]; myAgentId: string | null }) {
+function PropertiesTable({ rows, myAgentId, onPromoted }: { rows: PropertyRow[]; myAgentId: string | null; onPromoted: () => void }) {
   const router = useRouter()
+  const [promoting, setPromoting] = useState<string | null>(null)
 
   const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #1e1e1e' }
   const td: React.CSSProperties = { padding: '9px 10px', fontSize: 12.5, color: '#d0d0d0', borderBottom: '1px solid #161616', verticalAlign: 'top' }
+
+  // Same endpoint /properties/[id]'s own "→ Προς Εκτίμηση" button calls —
+  // server-enforced ownership there (agent_id === caller, or admin/ceo), so
+  // this is just a second, faster entry point into the same real action,
+  // not a separate permission surface.
+  async function promote(id: string) {
+    setPromoting(id)
+    await authedFetch('/api/meeting-properties/set-status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ property_id: id, status: 'for_appraisal' }),
+    })
+    setPromoting(null)
+    onPromoted()
+  }
 
   return (
     <div style={{ overflowX: 'auto', border: '1px solid #1a1a1a', borderRadius: 8 }}>
@@ -245,6 +260,7 @@ function PropertiesTable({ rows, myAgentId }: { rows: PropertyRow[]; myAgentId: 
             <th style={th}>Τιμή</th>
             <th style={th}>Κατάσταση</th>
             <th style={th}>Ανέβηκε από</th>
+            <th style={th}>Ενέργειες</th>
           </tr>
         </thead>
         <tbody>
@@ -286,6 +302,14 @@ function PropertiesTable({ rows, myAgentId }: { rows: PropertyRow[]; myAgentId: 
                 <td style={td}>{row.asking_price ? fmt(row.asking_price, '€') : '—'}</td>
                 <td style={td}><Badge s={row.status} /></td>
                 <td style={td}>{mine ? <span style={{ color: '#86efac' }}>Εσύ</span> : (row.agents?.full_name ?? '—')}</td>
+                <td style={td}>
+                  {mine && row.status === 'pending' ? (
+                    <button onClick={() => promote(row.id)} disabled={promoting === row.id}
+                      style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, background: '#2d1b00', color: '#fbbf24', border: '1px solid #7c4a03', borderRadius: 4, cursor: promoting === row.id ? 'not-allowed' : 'pointer', opacity: promoting === row.id ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                      {promoting === row.id ? '...' : '→ Προς Εκτίμηση'}
+                    </button>
+                  ) : <span style={{ color: '#333' }}>—</span>}
+                </td>
               </tr>
             )
           })}
@@ -598,7 +622,7 @@ export default function PersonalAdminPage() {
               {search ? 'Κανένα αποτέλεσμα.' : 'Κανένα ακίνητο — πάτα + Νέο ή μίλα.'}
             </p>
           )}
-          {filteredProps.length > 0 && <PropertiesTable rows={filteredProps} myAgentId={myAgentId} />}
+          {filteredProps.length > 0 && <PropertiesTable rows={filteredProps} myAgentId={myAgentId} onPromoted={load} />}
         </>
       )}
 
