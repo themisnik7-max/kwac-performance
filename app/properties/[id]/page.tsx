@@ -161,22 +161,26 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
     setTimeout(()=>setSaved(false),3000)
   }
 
-  // pending -> for_appraisal, the promotion into shared "Meeting Ακινήτων"
-  // review. Server-enforced ownership (agent_id === caller, or admin/ceo) —
-  // see app/api/meeting-properties/set-status/route.ts; this is just the UI
-  // that was missing to trigger it (the API already existed and worked).
-  async function handlePromoteToAppraisal(){
+  // pending <-> for_appraisal, promoting into (or pulling back out of)
+  // shared "Meeting Ακινήτων" review. Server-enforced ownership (agent_id
+  // === caller, or admin/ceo) — see
+  // app/api/meeting-properties/set-status/route.ts. Reaching 'estimated' is
+  // no longer an automatic side effect of promoting (that used to happen
+  // the instant the AI valuation ran, leaving no real undo window) — it
+  // now requires a top-producer comment in Meeting Ακινήτων, so undo stays
+  // meaningfully available the whole time a property sits in for_appraisal.
+  async function handleSetStatus(target: 'for_appraisal' | 'pending'){
     setStatusChanging(true); setErr(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch('/api/meeting-properties/set-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ property_id: id, status: 'for_appraisal' }),
+        body: JSON.stringify({ property_id: id, status: target }),
       })
       const data = await res.json()
       if (!res.ok) { setErr(data.error || 'Σφάλμα'); setStatusChanging(false); return }
-      setProp((x: any) => ({ ...x, status: 'for_appraisal' }))
+      setProp((x: any) => ({ ...x, status: target }))
       setStatusDone(true)
       setTimeout(() => setStatusDone(false), 3000)
     } catch {
@@ -213,8 +217,13 @@ export default function PropertyFilePage({params}: {params: {id: string}}){
           <div style={{display:'flex',gap:10,alignItems:'center'}}>
             {!canEdit && <span style={{fontSize:12,color:'rgba(255,255,255,.4)'}}>👁 Μόνο προβολή — ανέβηκε από άλλον μεσίτη</span>}
             {canEdit && p.status==='pending' && (
-              <button onClick={handlePromoteToAppraisal} disabled={statusChanging} style={{background:statusDone?C.green:'transparent',color:'#fff',border:'1px solid '+(statusDone?C.green:'rgba(255,255,255,.3)'),borderRadius:10,padding:'10px 18px',fontSize:13,fontWeight:700,cursor:'pointer',transition:'background .3s'}}>
+              <button onClick={()=>handleSetStatus('for_appraisal')} disabled={statusChanging} style={{background:statusDone?C.green:'transparent',color:'#fff',border:'1px solid '+(statusDone?C.green:'rgba(255,255,255,.3)'),borderRadius:10,padding:'10px 18px',fontSize:13,fontWeight:700,cursor:'pointer',transition:'background .3s'}}>
                 {statusChanging?'Αποστολή...':statusDone?'✓ Στάλθηκε':'→ Προς Εκτίμηση'}
+              </button>
+            )}
+            {canEdit && p.status==='for_appraisal' && (
+              <button onClick={()=>handleSetStatus('pending')} disabled={statusChanging} style={{background:'transparent',color:'rgba(255,255,255,.7)',border:'1px solid rgba(255,255,255,.3)',borderRadius:10,padding:'10px 18px',fontSize:13,fontWeight:700,cursor:'pointer'}}>
+                {statusChanging?'...':'↩ Αναίρεση'}
               </button>
             )}
             {canEdit && (

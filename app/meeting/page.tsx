@@ -180,10 +180,13 @@ export default function MeetingPage() {
     setSettingAppraisal(false)
     if (!res.ok) { showToast('❌ ' + (data.error || 'Σφάλμα')); return }
     showToast(newStatus === 'for_appraisal' ? '✅ Ορισθηκε ως Προς Εκτιμηση' : '✅ Επεστρεψε σε Εκκρεμει')
-    // Optimistic local update — avoids full refetch
-    const patch = (pr: any) => pr.id === p.id ? { ...pr, status: data.valuation_triggered ? 'estimated' : newStatus } : pr
+    // set-status only ever writes 'pending' or 'for_appraisal' itself —
+    // the auto-triggered AI valuation no longer bumps status to 'estimated'
+    // on its own (that now requires top-producer feedback, see
+    // submitComment below), so the optimistic update just matches newStatus.
+    const patch = (pr: any) => pr.id === p.id ? { ...pr, status: newStatus } : pr
     setProps(prev => prev.map(patch))
-    setSelected((prev: any) => prev?.id === p.id ? { ...prev, status: data.valuation_triggered ? 'estimated' : newStatus } : prev)
+    setSelected((prev: any) => prev?.id === p.id ? { ...prev, status: newStatus } : prev)
   }
 
   async function submitComment() {
@@ -203,7 +206,17 @@ export default function MeetingPage() {
     setSavingComment(false)
     if (!res.ok) { showToast('❌ ' + (data.error || 'Σφαλμα')); return }
     setMyComment(''); setMyEstimate(''); setAgrees(null)
-    showToast('✅ Σχολιο αποθηκευτηκε!')
+    // A top producer's comment is what actually finalizes the appraisal —
+    // see app/api/meeting-comments/route.ts. Everyone else's comment is
+    // saved the same way but doesn't move the status.
+    if (data.marked_estimated) {
+      showToast('⭐ Σχολιο αποθηκευτηκε — η εκτιμηση οριστικοποιηθηκε!')
+      const pid = selected.id
+      setProps(prev => prev.map(pr => pr.id === pid ? { ...pr, status: 'estimated' } : pr))
+      setSelected((prev: any) => prev?.id === pid ? { ...prev, status: 'estimated' } : prev)
+    } else {
+      showToast('✅ Σχολιο αποθηκευτηκε!')
+    }
     fetchComments(selected.id)
   }
 

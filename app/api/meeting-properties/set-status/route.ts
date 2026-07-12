@@ -28,10 +28,18 @@ export async function POST(req: NextRequest) {
   if (!ALLOWED.includes(status)) return NextResponse.json({ error: 'Invalid status' }, { status: 400 })
 
   const { data: prop } = await sb
-    .from('meeting_properties').select('id, agent_id, agency_id').eq('id', property_id).single()
+    .from('meeting_properties').select('id, agent_id, agency_id, status').eq('id', property_id).single()
   if (!prop || prop.agency_id !== caller.agency_id) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   if (prop.agent_id !== caller.id && !isCeoOrAdmin(caller)) {
     return NextResponse.json({ error: 'Μόνο ο υπεύθυνος μεσίτης μπορεί να αλλάξει την κατάσταση' }, { status: 403 })
+  }
+  // This route is only the pre-review pending<->for_appraisal toggle. Once
+  // a top producer has commented (status='estimated') or an admin has
+  // closed it out (status='completed'), reverting is a bigger, more
+  // deliberate action than "I clicked the wrong button" — not offered by
+  // this endpoint.
+  if (prop.status !== 'pending' && prop.status !== 'for_appraisal') {
+    return NextResponse.json({ error: 'Δεν μπορεί να αλλάξει κατάσταση πλέον — έχει ήδη εκτιμηθεί.' }, { status: 409 })
   }
 
   const { error: updErr } = await sb.from('meeting_properties').update({ status }).eq('id', property_id)

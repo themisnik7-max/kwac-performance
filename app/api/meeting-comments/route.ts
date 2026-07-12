@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
   if (!property_id || !comment?.trim() || agrees_with_ai == null)
     return NextResponse.json({ error: 'property_id, comment, agrees_with_ai required' }, { status: 400 })
 
-  const { data: prop } = await sb.from('meeting_properties').select('area, agency_id').eq('id', property_id).single()
+  const { data: prop } = await sb.from('meeting_properties').select('area, agency_id, status').eq('id', property_id).single()
   if (!prop || prop.agency_id !== caller.agency_id) return NextResponse.json({ error: 'Property not found' }, { status: 404 })
 
   const { data: valuation } = await sb.from('meeting_valuations').select('property_id').eq('property_id', property_id).maybeSingle()
@@ -39,5 +39,23 @@ export async function POST(req: NextRequest) {
     feedback_processed: false, feedback_weight: 1.0,
   })
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ ok: true })
+
+  // A property only counts as genuinely "estimated" once a top producer for
+  // its area has weighed in — the AI number alone used to flip this
+  // automatically the moment it was computed (see migration
+  // 20260712120000), leaving no real window to review or undo. Scoped to
+  // status='for_appraisal' so this can't resurrect an already-completed
+  // property or fire twice.
+  let markedEstimated = false
+  if (prop.status === 'for_appraisal' && prop.area) {
+    const { data: topProducers } = await sb.rpc('top_producers_by_area', { p_area: prop.area })
+    const isTopProducer = (topProducers || []).some((tp: any) => tp.agent_id === caller.id)
+    if (isTopProducer) {
+      const { data: updated } = await sb.from('meeting_properties')
+        .update({ status: 'estimated' }).eq('id', property_id).eq('status', 'for_appraisal').select('id')
+      markedEstimated = !!updated?.length
+    }
+  }
+
+  return NextResponse.json({ ok: true, marked_estimated: markedEstimated })
 }

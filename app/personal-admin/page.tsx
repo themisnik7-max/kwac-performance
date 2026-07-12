@@ -238,12 +238,15 @@ function PropertiesTable({ rows, myAgentId, onPromoted }: { rows: PropertyRow[];
   // Same endpoint /properties/[id]'s own "→ Προς Εκτίμηση" button calls —
   // server-enforced ownership there (agent_id === caller, or admin/ceo), so
   // this is just a second, faster entry point into the same real action,
-  // not a separate permission surface.
-  async function promote(id: string) {
+  // not a separate permission surface. Reversible while still
+  // for_appraisal — reaching 'estimated' now requires a top-producer
+  // comment in Meeting Ακινήτων (see app/api/meeting-comments), not just
+  // the AI valuation, so this stays undoable for the whole review window.
+  async function setStatus(id: string, status: 'for_appraisal' | 'pending') {
     setPromoting(id)
     await authedFetch('/api/meeting-properties/set-status', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ property_id: id, status: 'for_appraisal' }),
+      body: JSON.stringify({ property_id: id, status }),
     })
     setPromoting(null)
     onPromoted()
@@ -303,12 +306,19 @@ function PropertiesTable({ rows, myAgentId, onPromoted }: { rows: PropertyRow[];
                 <td style={td}><Badge s={row.status} /></td>
                 <td style={td}>{mine ? <span style={{ color: '#86efac' }}>Εσύ</span> : (row.agents?.full_name ?? '—')}</td>
                 <td style={td}>
-                  {mine && row.status === 'pending' ? (
-                    <button onClick={() => promote(row.id)} disabled={promoting === row.id}
+                  {mine && row.status === 'pending' && (
+                    <button onClick={() => setStatus(row.id, 'for_appraisal')} disabled={promoting === row.id}
                       style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, background: '#2d1b00', color: '#fbbf24', border: '1px solid #7c4a03', borderRadius: 4, cursor: promoting === row.id ? 'not-allowed' : 'pointer', opacity: promoting === row.id ? 0.6 : 1, whiteSpace: 'nowrap' }}>
                       {promoting === row.id ? '...' : '→ Προς Εκτίμηση'}
                     </button>
-                  ) : <span style={{ color: '#333' }}>—</span>}
+                  )}
+                  {mine && row.status === 'for_appraisal' && (
+                    <button onClick={() => setStatus(row.id, 'pending')} disabled={promoting === row.id}
+                      style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, background: '#1a1a1a', color: '#888', border: '1px solid #2a2a2a', borderRadius: 4, cursor: promoting === row.id ? 'not-allowed' : 'pointer', opacity: promoting === row.id ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                      {promoting === row.id ? '...' : '↩ Αναίρεση'}
+                    </button>
+                  )}
+                  {(!mine || (row.status !== 'pending' && row.status !== 'for_appraisal')) && <span style={{ color: '#333' }}>—</span>}
                 </td>
               </tr>
             )
