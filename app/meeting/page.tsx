@@ -78,10 +78,14 @@ export default function MeetingPage() {
     setLoading(true)
     // Join agents so we can show + search by agent name
     // Sort newest imported first (created_at DESC)
-    const { data } = await sb
+    const { data, error } = await sb
       .from('meeting_properties')
-      .select('*, agents(id, full_name, email)')
+      .select('*, agents!agent_id(id, full_name, email)')
       .order('created_at', { ascending: false })
+    // A bad query here previously failed silently — an empty list looked
+    // identical to "no properties yet," which is how the ambiguous-embed
+    // regression went unnoticed until an agent reported it. Surface it.
+    if (error) showToast('❌ ' + error.message)
     setProps(data || [])
     setLoading(false)
   }
@@ -280,7 +284,7 @@ export default function MeetingPage() {
       meeting_date: new Date().toISOString().split('T')[0],
       status:       'pending',
       created_at:   new Date().toISOString(),
-    }).select('*, agents(id, full_name, email)').single()
+    }).select('*, agents!agent_id(id, full_name, email)').single()
     if (data) { setProps(prev => [data, ...prev]); setSelected(data) }
   }
 
