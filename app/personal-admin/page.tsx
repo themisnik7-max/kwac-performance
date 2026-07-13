@@ -175,8 +175,8 @@ const EMPTY_PROP: ES = {
   security_door: false, seller_motivation: '', ai_summary: '',
 }
 
-function NewPropertyForm({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
-  const [state,  setState]  = useState<ES>({ ...EMPTY_PROP })
+function NewPropertyForm({ onSaved, onCancel, prefill }: { onSaved: () => void; onCancel: () => void; prefill?: ES }) {
+  const [state,  setState]  = useState<ES>({ ...EMPTY_PROP, ...prefill })
   const [saving, setSaving] = useState(false)
   const [err,    setErr]    = useState<string | null>(null)
 
@@ -295,7 +295,10 @@ function sourceLabel(sources: string[] | null): string {
   return sources.map(s => SOURCE_LABELS[s] ?? s).join(', ')
 }
 
-function ContactsTable({ rows, myAgentId }: { rows: ContactRow[]; myAgentId: string | null }) {
+function ContactsTable({ rows, myAgentId, onAddProperty, onAddDemand }: {
+  rows: ContactRow[]; myAgentId: string | null
+  onAddProperty: (row: ContactRow) => void; onAddDemand: (row: ContactRow) => void
+}) {
   const router = useRouter()
   const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #1e1e1e' }
   const td: React.CSSProperties = { padding: '9px 10px', fontSize: 12.5, color: '#d0d0d0', borderBottom: '1px solid #161616', verticalAlign: 'top' }
@@ -316,6 +319,7 @@ function ContactsTable({ rows, myAgentId }: { rows: ContactRow[]; myAgentId: str
             <th style={th}>Ακίνητο</th>
             <th style={th}>Ζήτηση</th>
             <th style={th}>Ιδιοκτήτης καρτέλας</th>
+            <th style={th}>Ενέργειες</th>
           </tr>
         </thead>
         <tbody>
@@ -336,6 +340,14 @@ function ContactsTable({ rows, myAgentId }: { rows: ContactRow[]; myAgentId: str
                 <td style={td}><span style={pill(row.property_count > 0, row.property_count)}>{row.property_count > 0 ? `✓ ${row.property_count}` : '—'}</span></td>
                 <td style={td}><span style={pill(row.demand_count > 0, row.demand_count)}>{row.demand_count > 0 ? `✓ ${row.demand_count}` : '—'}</span></td>
                 <td style={td}>{mine ? <span style={{ color: '#86efac' }}>Εσύ</span> : (row.agents?.full_name ?? '—')}</td>
+                <td style={td}>
+                  {mine ? (
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button onClick={() => onAddProperty(row)} style={{ ...btnS('#161616', '#93c5fd'), fontSize: 10, padding: '3px 7px' }}>+ Ακίνητο</button>
+                      <button onClick={() => onAddDemand(row)} style={{ ...btnS('#161616', '#fbbf24'), fontSize: 10, padding: '3px 7px' }}>+ Ζήτηση</button>
+                    </div>
+                  ) : <span style={{ color: '#333' }}>—</span>}
+                </td>
               </tr>
             )
           })}
@@ -521,12 +533,12 @@ const EMPTY_DEM: ES = {
   condition_req: '', ai_summary: '',
 }
 
-function DemandCard({ row, onSaved, onCancel, isNew, canEdit }: {
-  row: DemandRow | null; onSaved: () => void; onCancel?: () => void; isNew?: boolean; canEdit: boolean
+function DemandCard({ row, onSaved, onCancel, isNew, canEdit, prefill }: {
+  row: DemandRow | null; onSaved: () => void; onCancel?: () => void; isNew?: boolean; canEdit: boolean; prefill?: ES
 }) {
   const [open,        setOpen]        = useState(!!isNew)
   const [editMode,    setEditMode]    = useState(!!isNew)
-  const [state,       setState]       = useState<ES>(row ? toES(row as unknown as ES) : { ...EMPTY_DEM })
+  const [state,       setState]       = useState<ES>(row ? toES(row as unknown as ES) : { ...EMPTY_DEM, ...prefill })
   const [saving,      setSaving]      = useState(false)
   const [err,         setErr]         = useState<string | null>(null)
   const [matching,    setMatching]    = useState(false)
@@ -732,8 +744,25 @@ function PersonalAdminInner() {
   const [loading,    setLoading]    = useState(true)
   const [loadError,  setLoadError]  = useState<string | null>(null)
   const [showNew,    setShowNew]    = useState(false)
+  const [prefill,    setPrefill]    = useState<ES | null>(null)
   const [search,     setSearch]     = useState('')
   const [notice,     setNotice]     = useState<string | null>(null)
+
+  // "+ Ακίνητο"/"+ Ζήτηση" on a contact card (Πελάτες tab) jump to the same
+  // quick-add forms the tab bar's own "+ Νέο" uses, just pre-filled — the
+  // owner/client name+phone+email match what voice-ingest's find-or-create
+  // will re-match by phone, so submitting attaches to THIS exact contact
+  // rather than creating a duplicate (see lib/contacts find-or-create).
+  function addPropertyFor(c: ContactRow) {
+    const name = c.full_name || [c.first_name, c.last_name].filter(Boolean).join(' ')
+    setPrefill({ owner_name: name || null, owner_phone: c.phone, owner_email: c.email })
+    setTab('properties'); setShowNew(true)
+  }
+  function addDemandFor(c: ContactRow) {
+    const name = c.full_name || [c.first_name, c.last_name].filter(Boolean).join(' ')
+    setPrefill({ client_name: name || null, client_phone: c.phone, client_email: c.email })
+    setTab('demand'); setShowNew(true)
+  }
 
   // Bounced back from Google's consent screen via /api/google-contacts/callback
   useEffect(() => {
@@ -773,7 +802,7 @@ function PersonalAdminInner() {
 
   useEffect(() => { load() }, [load])
 
-  function afterSave() { setShowNew(false); load() }
+  function afterSave() { setShowNew(false); setPrefill(null); load() }
 
   const q = search.toLowerCase().trim()
 
@@ -817,7 +846,7 @@ function PersonalAdminInner() {
       {/* Tabs + New button */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 10, borderBottom: '1px solid #1a1a1a', alignItems: 'flex-end' }}>
         {(['properties', 'demand', 'contacts'] as const).map(t => (
-          <button key={t} onClick={() => { setTab(t); setShowNew(false) }}
+          <button key={t} onClick={() => { setTab(t); setShowNew(false); setPrefill(null) }}
             style={{ padding: '6px 13px', fontSize: 13, background: 'none', border: 'none',
               color: tab === t ? '#f0f0f0' : '#555', cursor: 'pointer', fontWeight: tab === t ? 600 : 400,
               borderBottom: tab === t ? `2px solid ${RED}` : '2px solid transparent', marginBottom: -1 }}>
@@ -836,9 +865,10 @@ function PersonalAdminInner() {
       {loading   && <p style={{ color: '#444', fontSize: 13 }}>Φόρτωση…</p>}
       {loadError && <p style={{ fontSize: 12, color: '#f87171', marginBottom: 10, padding: '8px 10px', background: '#1a0000', borderRadius: 6 }}>⚠ {loadError}</p>}
 
-      {/* New entry */}
-      {showNew && tab === 'properties' && <NewPropertyForm onSaved={afterSave} onCancel={() => setShowNew(false)} />}
-      {showNew && tab === 'demand'     && <DemandCard   row={null} isNew canEdit onSaved={afterSave} onCancel={() => setShowNew(false)} />}
+      {/* New entry — prefill carries owner/client fields over from a "+
+          Ακίνητο"/"+ Ζήτηση" click on a contact card (Πελάτες tab below) */}
+      {showNew && tab === 'properties' && <NewPropertyForm prefill={prefill ?? undefined} onSaved={afterSave} onCancel={() => { setShowNew(false); setPrefill(null) }} />}
+      {showNew && tab === 'demand'     && <DemandCard   row={null} isNew canEdit prefill={prefill ?? undefined} onSaved={afterSave} onCancel={() => { setShowNew(false); setPrefill(null) }} />}
       {showNew && tab === 'contacts'   && <NewContactForm onSaved={afterSave} onCancel={() => setShowNew(false)} />}
 
       {/* Lists — agency-wide; edit rights (checked per-row below) stay
@@ -875,7 +905,7 @@ function PersonalAdminInner() {
               {search ? 'Κανένα αποτέλεσμα.' : 'Κανένας πελάτης — πάτα + Νέο ή σύνδεσε Google Contacts.'}
             </p>
           )}
-          {filteredContacts.length > 0 && <ContactsTable rows={filteredContacts} myAgentId={myAgentId} />}
+          {filteredContacts.length > 0 && <ContactsTable rows={filteredContacts} myAgentId={myAgentId} onAddProperty={addPropertyFor} onAddDemand={addDemandFor} />}
         </>
       )}
     </div>
