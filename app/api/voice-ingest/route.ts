@@ -77,14 +77,20 @@ export async function POST(req: NextRequest) {
     // unlinked forever, so Personal Admin / the property detail page had
     // nothing to make clickable ("δεν έχει συνδεθεί ακόμα με καρτέλα
     // επαφής"). A manually-entered owner should always end up with a real
-    // contact card, same as add_contact does for AI Admin.
+    // contact card, same as add_contact does for AI Admin. Matching is
+    // scoped to the caller's own contacts (or unowned "general pool" ones),
+    // same as contacts_select's RLS — searching agency-wide here would risk
+    // silently attaching this property to a COLLEAGUE's private contact
+    // (agent_id set to someone else), which the uploading agent then
+    // couldn't even open (contacts are owner-scoped since 20260712110000).
     let ownerContactId: string | null = null
     if (phone && agencyId) {
+      const phoneOr = `or(phone.eq.${phone},phone2.eq.${phone})`
       const { data: contact } = await db
         .from('contacts')
         .select('id')
         .eq('agency_id', agencyId)
-        .or(`phone.eq.${phone},phone2.eq.${phone}`)
+        .or(`and(agent_id.eq.${caller.id},${phoneOr}),and(agent_id.is.null,${phoneOr})`)
         .limit(1)
         .single()
       if (contact) {
@@ -176,10 +182,41 @@ export async function POST(req: NextRequest) {
       existingId = ex?.id ?? null
     }
 
+    // Same find-or-create link into contacts that property_scouted does
+    // above (including the same owner/unowned-only scoping — see its
+    // comment), so a client with a demand also gets a real card in Personal
+    // Admin's Πελάτες tab instead of staying a name/phone stuck inside the
+    // demand row with nothing to click through to.
+    let clientContactId: string | null = null
+    if (phone && agencyId) {
+      const phoneOr = `or(phone.eq.${phone},phone2.eq.${phone})`
+      const { data: contact } = await db
+        .from('contacts')
+        .select('id')
+        .eq('agency_id', agencyId)
+        .or(`and(agent_id.eq.${caller.id},${phoneOr}),and(agent_id.is.null,${phoneOr})`)
+        .limit(1)
+        .single()
+      if (contact) {
+        clientContactId = contact.id
+      } else {
+        const clientName = (fields.client_name as string) || null
+        const { first_name, last_name } = splitName(clientName || '')
+        const { data: created, error: contactErr } = await db.from('contacts').insert({
+          agency_id: agencyId, agent_id: caller.id, full_name: clientName,
+          first_name: first_name || null, last_name: last_name || null,
+          phone, email: (fields.client_email as string) ?? null, type: 'contact',
+        }).select('id').single()
+        if (contactErr) console.error('[voice-ingest] client contact auto-create (non-fatal)', contactErr)
+        clientContactId = created?.id ?? null
+      }
+    }
+
     const payload = {
       agency_id:        agencyId,
       agent_id:         caller.id,
       lead_id:          leadId ?? null,
+      contact_id:       clientContactId,
       raw_transcript:   transcript,
       client_name:      (fields.client_name      as string)   ?? null,
       client_phone:     phone,

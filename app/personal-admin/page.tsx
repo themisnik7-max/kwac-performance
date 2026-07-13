@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
-import { useRouter }           from 'next/navigation'
+import { useEffect, useState, useCallback, useMemo, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient }        from '@supabase/supabase-js'
 import { VoiceMemoButton }     from '@/components/VoiceMemoButton'
 import { contactName }         from '@/lib/contacts'
@@ -31,6 +31,14 @@ type PropertyRow = {
   ai_summary: string | null; status: string
   voice_note_ids: string[]; created_at: string; updated_at: string | null
   agent_id: string; agents: UploaderAgent
+}
+
+type ContactRow = {
+  id: string; full_name: string | null; first_name: string | null; last_name: string | null
+  phone: string | null; phone2: string | null; email: string | null
+  type: string | null; sources: string[] | null; kwac_tag: boolean | null; notes: string | null
+  created_at: string; agent_id: string; agents: UploaderAgent
+  property_count: number; demand_count: number
 }
 
 type DemandRow = {
@@ -222,6 +230,180 @@ function NewPropertyForm({ onSaved, onCancel }: { onSaved: () => void; onCancel:
         </button>
         <button onClick={onCancel} style={btnS('#1e1e1e', '#666')}>Ακύρωση</button>
       </div>
+    </div>
+  )
+}
+
+// ── New contact quick-add form ─────────────────────────────────────
+// A contact doesn't need a property or demand to exist — that's the point
+// of this tab (see ContactsTable below). This is the manual path; the
+// Google Contacts widget is the bulk one.
+
+const EMPTY_CONTACT: ES = { full_name: '', phone: '', phone2: '', email: '', notes: '' }
+
+function NewContactForm({ onSaved, onCancel }: { onSaved: () => void; onCancel: () => void }) {
+  const [state,  setState]  = useState<ES>({ ...EMPTY_CONTACT })
+  const [saving, setSaving] = useState(false)
+  const [err,    setErr]    = useState<string | null>(null)
+
+  const set = (k: string, v: unknown) => setState(p => ({ ...p, [k]: v }))
+
+  async function save() {
+    setSaving(true); setErr(null)
+    const res = await authedFetch('/api/personal-admin/contacts', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state),
+    })
+    const data = await res.json()
+    setSaving(false)
+    if (!res.ok) { setErr(data.error ?? 'Σφάλμα'); return }
+    onSaved()
+  }
+
+  return (
+    <div style={{ background: '#161616', border: '1px solid #1e1e1e', borderRadius: 8, padding: '12px 14px', marginBottom: 6 }}>
+      <span style={{ fontSize: 14, fontWeight: 700, color: '#f0f0f0', display: 'block', marginBottom: 10 }}>Νέος Πελάτης</span>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: '8px 12px', marginBottom: 12 }}>
+        <FI label="Ονοματεπώνυμο" k="full_name" type="text" state={state} set={set} />
+        <FI label="Τηλέφωνο"      k="phone"     type="text" state={state} set={set} />
+        <FI label="Τηλέφωνο 2"    k="phone2"    type="text" state={state} set={set} />
+        <FI label="Email"         k="email"     type="text" state={state} set={set} />
+        <div style={{ gridColumn: '1/-1' }}><FI label="Σημειώσεις" k="notes" type="text" state={state} set={set} /></div>
+      </div>
+      {err && <p style={{ fontSize: 12, color: '#f87171', margin: '0 0 8px' }}>{err}</p>}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={save} disabled={saving}
+          style={{ padding: '7px 16px', background: RED, color: '#fff', border: 'none', borderRadius: 5, fontSize: 13, fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.6 : 1 }}>
+          {saving ? 'Αποθήκευση…' : 'Αποθήκευση'}
+        </button>
+        <button onClick={onCancel} style={btnS('#1e1e1e', '#666')}>Ακύρωση</button>
+      </div>
+    </div>
+  )
+}
+
+// ── Contacts table ────────────────────────────────────────────────
+// Every client gets a card here regardless of whether a property or demand
+// has been logged for them yet — those are shown as columns, not gates.
+
+const SOURCE_LABELS: Record<string, string> = {
+  google_contacts: '🔵 Google', manual: '✍️ Χειροκίνητα', ilist: 'iList', voice: '🎙️ Φωνητικό',
+}
+
+function sourceLabel(sources: string[] | null): string {
+  if (!sources || !sources.length) return '—'
+  return sources.map(s => SOURCE_LABELS[s] ?? s).join(', ')
+}
+
+function ContactsTable({ rows, myAgentId }: { rows: ContactRow[]; myAgentId: string | null }) {
+  const router = useRouter()
+  const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', fontSize: 10, fontWeight: 700, color: '#555', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid #1e1e1e' }
+  const td: React.CSSProperties = { padding: '9px 10px', fontSize: 12.5, color: '#d0d0d0', borderBottom: '1px solid #161616', verticalAlign: 'top' }
+  const pill = (on: boolean, n: number): React.CSSProperties => ({
+    display: 'inline-block', padding: '2px 8px', borderRadius: 100, fontSize: 11, fontWeight: 600,
+    background: on ? '#1c2e1c' : '#161616', color: on ? '#86efac' : '#444',
+  })
+
+  return (
+    <div style={{ overflowX: 'auto', border: '1px solid #1a1a1a', borderRadius: 8 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr>
+            <th style={th}>Πελάτης</th>
+            <th style={th}>Τηλέφωνο</th>
+            <th style={th}>Email</th>
+            <th style={th}>Πηγή</th>
+            <th style={th}>Ακίνητο</th>
+            <th style={th}>Ζήτηση</th>
+            <th style={th}>Ιδιοκτήτης καρτέλας</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row => {
+            const mine = row.agent_id === myAgentId
+            const name = row.full_name || [row.first_name, row.last_name].filter(Boolean).join(' ') || '—'
+            return (
+              <tr key={row.id}>
+                <td style={td}>
+                  <span onClick={() => router.push(`/contacts/${row.id}`)} style={{ cursor: 'pointer', color: '#f0f0f0', fontWeight: 600 }}>
+                    {name}
+                  </span>
+                  {row.kwac_tag && <span title="Ετικέτα KWAC" style={{ marginLeft: 6, fontSize: 11 }}>🏷️</span>}
+                </td>
+                <td style={td}>{row.phone || '—'}</td>
+                <td style={td}>{row.email || '—'}</td>
+                <td style={td}>{sourceLabel(row.sources)}</td>
+                <td style={td}><span style={pill(row.property_count > 0, row.property_count)}>{row.property_count > 0 ? `✓ ${row.property_count}` : '—'}</span></td>
+                <td style={td}><span style={pill(row.demand_count > 0, row.demand_count)}>{row.demand_count > 0 ? `✓ ${row.demand_count}` : '—'}</span></td>
+                <td style={td}>{mine ? <span style={{ color: '#86efac' }}>Εσύ</span> : (row.agents?.full_name ?? '—')}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Google Contacts connect/sync widget ──────────────────────────
+// Lives at the top of the Πελάτες tab, not a separate settings page — this
+// whole feature was scoped as "in Personal Admin," and it's the one place
+// an agent is already looking when they think about their client list.
+
+type GStatus = { configured: boolean; connected: boolean; google_email?: string; last_synced_at?: string; last_sync_count?: number; last_sync_error?: string }
+
+function GoogleContactsWidget({ onSynced }: { onSynced: () => void }) {
+  const [status,  setStatus]  = useState<GStatus | null>(null)
+  const [busy,    setBusy]    = useState(false)
+  const [msg,     setMsg]     = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    const res = await authedFetch('/api/google-contacts/status')
+    if (res.ok) setStatus(await res.json())
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function connect() {
+    setBusy(true); setMsg(null)
+    const res = await authedFetch('/api/google-contacts/connect', { method: 'POST' })
+    const data = await res.json()
+    setBusy(false)
+    if (!res.ok) { setMsg(data.message || data.error || 'Σφάλμα'); return }
+    window.location.href = data.url
+  }
+
+  async function sync() {
+    setBusy(true); setMsg(null)
+    const res = await authedFetch('/api/google-contacts/sync', { method: 'POST' })
+    const data = await res.json()
+    setBusy(false)
+    if (!res.ok) { setMsg(data.message || data.error || 'Σφάλμα'); return }
+    setMsg(data.group_found === false ? data.message : `✅ Συγχρονίστηκαν ${data.synced} επαφές (${data.created} νέες, ${data.updated} ενημερώθηκαν)`)
+    load(); onSynced()
+  }
+
+  if (!status) return null
+
+  return (
+    <div style={{ background: '#161616', border: '1px solid #1e1e1e', borderRadius: 8, padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 18 }}>🔵</span>
+      <div style={{ flex: 1, minWidth: 180 }}>
+        <div style={{ fontSize: 12.5, color: '#e0e0e0', fontWeight: 600 }}>Google Contacts</div>
+        <div style={{ fontSize: 11, color: '#666' }}>
+          {!status.configured ? 'Δεν έχει ρυθμιστεί ακόμα από τον διαχειριστή.'
+            : status.connected ? `Συνδεδεμένο${status.google_email ? ' · ' + status.google_email : ''}${status.last_synced_at ? ' · τελευταίος συγχρονισμός ' + new Date(status.last_synced_at).toLocaleString('el-GR') : ' · δεν έχει τρέξει ακόμα'}`
+            : 'Μη συνδεδεμένο — σύνδεσε το δικό σου Google για να φέρεις όσους έχεις με ετικέτα "KWAC".'}
+        </div>
+        {msg && <div style={{ fontSize: 11, color: msg.startsWith('✅') ? '#86efac' : '#fbbf24', marginTop: 4 }}>{msg}</div>}
+      </div>
+      {status.configured && (
+        status.connected ? (
+          <button onClick={sync} disabled={busy} style={btnS('#1c2e1c', '#86efac')}>{busy ? '...' : '🔄 Συγχρονισμός'}</button>
+        ) : (
+          <button onClick={connect} disabled={busy} style={btnS(RED, '#fff')}>{busy ? '...' : 'Σύνδεση'}</button>
+        )
+      )}
     </div>
   )
 }
@@ -526,17 +708,43 @@ function DemandCard({ row, onSaved, onCancel, isNew, canEdit }: {
 
 // ── Page ──────────────────────────────────────────────────────────
 
+// useSearchParams (read below, for the Google OAuth redirect back into this
+// page) requires a Suspense boundary in the App Router, or the build fails
+// with "missing-suspense-with-csr-bailout" — the actual page logic lives in
+// the inner component so this wrapper stays trivial.
 export default function PersonalAdminPage() {
+  return (
+    <Suspense fallback={null}>
+      <PersonalAdminInner />
+    </Suspense>
+  )
+}
+
+function PersonalAdminInner() {
   const { agent, role, loading: appLoading } = useApp()
   const myAgentId = agent?.id ?? null
   const isCeoOrAdmin = role === 'ceo'
-  const [tab,        setTab]        = useState<'properties' | 'demand'>('properties')
+  const searchParams = useSearchParams()
+  const [tab,        setTab]        = useState<'properties' | 'demand' | 'contacts'>('properties')
   const [properties, setProperties] = useState<PropertyRow[]>([])
   const [demands,    setDemands]    = useState<DemandRow[]>([])
+  const [contacts,   setContacts]   = useState<ContactRow[]>([])
   const [loading,    setLoading]    = useState(true)
   const [loadError,  setLoadError]  = useState<string | null>(null)
   const [showNew,    setShowNew]    = useState(false)
   const [search,     setSearch]     = useState('')
+  const [notice,     setNotice]     = useState<string | null>(null)
+
+  // Bounced back from Google's consent screen via /api/google-contacts/callback
+  useEffect(() => {
+    const g = searchParams.get('google')
+    if (!g) return
+    setTab('contacts')
+    setNotice(g === 'connected' ? '✅ Το Google Contacts συνδέθηκε!' : g === 'denied' ? 'Η σύνδεση ακυρώθηκε.' : '⚠ Κάτι πήγε στραβά με τη σύνδεση Google.')
+    window.history.replaceState(null, '', '/personal-admin')
+    const t = setTimeout(() => setNotice(null), 5000)
+    return () => clearTimeout(t)
+  }, [searchParams])
 
   // Agency-wide now, not just "mine" — but owner/client PII (name, phone,
   // email) for a colleague's row must NOT come along for the ride, since
@@ -548,15 +756,18 @@ export default function PersonalAdminPage() {
   const load = useCallback(async () => {
     if (appLoading) return
     setLoading(true); setLoadError(null)
-    const [propsRes, demsRes] = await Promise.all([
+    const [propsRes, demsRes, contactsRes] = await Promise.all([
       authedFetch('/api/personal-admin/properties'),
       authedFetch('/api/personal-admin/demand'),
+      authedFetch('/api/personal-admin/contacts'),
     ])
-    const [propsData, demsData] = await Promise.all([propsRes.json(), demsRes.json()])
+    const [propsData, demsData, contactsData] = await Promise.all([propsRes.json(), demsRes.json(), contactsRes.json()])
     if (!propsRes.ok) setLoadError(`Ακίνητα: ${propsData.error}`)
     if (!demsRes.ok)  setLoadError(e => e ? e + ' | ' + demsData.error : `Ζητήσεις: ${demsData.error}`)
+    if (!contactsRes.ok) setLoadError(e => e ? e + ' | ' + contactsData.error : `Πελάτες: ${contactsData.error}`)
     setProperties((propsData.properties ?? []) as PropertyRow[])
     setDemands((demsData.demand ?? []) as DemandRow[])
+    setContacts((contactsData.contacts ?? []) as ContactRow[])
     setLoading(false)
   }, [appLoading])
 
@@ -575,6 +786,11 @@ export default function PersonalAdminPage() {
     [r.client_name, r.client_phone, r.client_email, ...(r.areas_preferred ?? [])]
       .some(f => f?.toLowerCase().includes(q))
   ), [demands, q])
+
+  const filteredContacts = useMemo(() => !q ? contacts : contacts.filter(r =>
+    [r.full_name, r.first_name, r.last_name, r.phone, r.phone2, r.email]
+      .some(f => f?.toLowerCase().includes(q))
+  ), [contacts, q])
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#f0f0f0', padding: '20px 14px', maxWidth: 680, margin: '0 auto' }}>
@@ -600,12 +816,12 @@ export default function PersonalAdminPage() {
 
       {/* Tabs + New button */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 10, borderBottom: '1px solid #1a1a1a', alignItems: 'flex-end' }}>
-        {(['properties', 'demand'] as const).map(t => (
+        {(['properties', 'demand', 'contacts'] as const).map(t => (
           <button key={t} onClick={() => { setTab(t); setShowNew(false) }}
             style={{ padding: '6px 13px', fontSize: 13, background: 'none', border: 'none',
               color: tab === t ? '#f0f0f0' : '#555', cursor: 'pointer', fontWeight: tab === t ? 600 : 400,
               borderBottom: tab === t ? `2px solid ${RED}` : '2px solid transparent', marginBottom: -1 }}>
-            {t === 'properties' ? `Ακίνητα (${filteredProps.length})` : `Ζητήσεις (${filteredDems.length})`}
+            {t === 'properties' ? `Ακίνητα (${filteredProps.length})` : t === 'demand' ? `Ζητήσεις (${filteredDems.length})` : `Πελάτες (${filteredContacts.length})`}
           </button>
         ))}
         <div style={{ marginLeft: 'auto', paddingBottom: 4 }}>
@@ -616,12 +832,14 @@ export default function PersonalAdminPage() {
         </div>
       </div>
 
+      {notice    && <p style={{ fontSize: 12, color: notice.startsWith('⚠') ? '#fbbf24' : '#86efac', marginBottom: 10, padding: '8px 10px', background: '#111', borderRadius: 6 }}>{notice}</p>}
       {loading   && <p style={{ color: '#444', fontSize: 13 }}>Φόρτωση…</p>}
       {loadError && <p style={{ fontSize: 12, color: '#f87171', marginBottom: 10, padding: '8px 10px', background: '#1a0000', borderRadius: 6 }}>⚠ {loadError}</p>}
 
       {/* New entry */}
       {showNew && tab === 'properties' && <NewPropertyForm onSaved={afterSave} onCancel={() => setShowNew(false)} />}
       {showNew && tab === 'demand'     && <DemandCard   row={null} isNew canEdit onSaved={afterSave} onCancel={() => setShowNew(false)} />}
+      {showNew && tab === 'contacts'   && <NewContactForm onSaved={afterSave} onCancel={() => setShowNew(false)} />}
 
       {/* Lists — agency-wide; edit rights (checked per-row below) stay
           limited to whoever uploaded it, or admin/ceo. */}
@@ -646,6 +864,18 @@ export default function PersonalAdminPage() {
           {filteredDems.map(row => (
             <DemandCard key={row.id} row={row} canEdit={row.agent_id === myAgentId || isCeoOrAdmin} onSaved={load} />
           ))}
+        </>
+      )}
+
+      {!loading && tab === 'contacts' && (
+        <>
+          <GoogleContactsWidget onSynced={load} />
+          {filteredContacts.length === 0 && !showNew && (
+            <p style={{ textAlign: 'center', color: '#333', fontSize: 13, paddingTop: 40 }}>
+              {search ? 'Κανένα αποτέλεσμα.' : 'Κανένας πελάτης — πάτα + Νέο ή σύνδεσε Google Contacts.'}
+            </p>
+          )}
+          {filteredContacts.length > 0 && <ContactsTable rows={filteredContacts} myAgentId={myAgentId} />}
         </>
       )}
     </div>

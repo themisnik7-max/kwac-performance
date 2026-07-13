@@ -64,11 +64,9 @@ export default function ContactProfilePage({params}: {params: {id: string}}){
       entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       setHistory(entries)
 
-      if (c.phone || c.email) {
-        const orParts = [c.phone && `client_phone.eq.${c.phone}`, c.email && `client_email.eq.${c.email}`].filter(Boolean).join(',')
-        const { data: dp } = await supabase.from('demand_profiles').select('id,property_type,budget_eur,status').or(orParts)
-        setDemandMatches(dp || [])
-      }
+      const { data: dp } = await supabase.from('demand_profiles')
+        .select('id,property_type,budget_eur,status').eq('contact_id', id)
+      setDemandMatches(dp || [])
 
       setLoading(false)
     })()
@@ -147,15 +145,14 @@ export default function ContactProfilePage({params}: {params: {id: string}}){
                 </a>
               ))}
 
-              {demandMatches.length > 0 && (<>
-                <Sec>Πιθανές Ζητήσεις (ταίριασμα τηλ./email)</Sec>
-                {demandMatches.map(d => (
-                  <div key={d.id} style={{padding:'10px 14px',background:C.white,border:'1px solid '+C.border,borderRadius:10,marginBottom:8,fontSize:13}}>
-                    {d.property_type || 'Ζήτηση'}{d.budget_eur && ` · έως €${Number(d.budget_eur).toLocaleString('el-GR')}`}
-                    <span style={{float:'right',color:C.muted,fontSize:11}}>{d.status}</span>
-                  </div>
-                ))}
-              </>)}
+              <Sec>Ζητήσεις ({demandMatches.length})</Sec>
+              {demandMatches.length===0 && <div style={{padding:16,textAlign:'center',color:C.muted,fontSize:13,background:C.subtle,borderRadius:12}}>Καμία ζήτηση καταγεγραμμένη.</div>}
+              {demandMatches.map(d => (
+                <div key={d.id} style={{padding:'10px 14px',background:C.white,border:'1px solid '+C.border,borderRadius:10,marginBottom:8,fontSize:13}}>
+                  {d.property_type || 'Ζήτηση'}{d.budget_eur && ` · έως €${Number(d.budget_eur).toLocaleString('el-GR')}`}
+                  <span style={{float:'right',color:C.muted,fontSize:11}}>{d.status}</span>
+                </div>
+              ))}
             </div>
 
             <div>
