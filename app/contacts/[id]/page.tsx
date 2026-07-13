@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import Sidebar from '@/components/Sidebar'
 import CallLink from '@/components/CallLink'
 import { contactName, splitName } from '@/lib/contacts'
+import { authedFetch } from '@/lib/authedFetch'
 
 const C = {red:'#CC2229',dark:'#1A1A1A',muted:'#6B7280',border:'#EBEBEB',subtle:'#F7F7F7',white:'#FFFFFF',green:'#16A34A',blue:'#2563EB'}
 
@@ -31,6 +32,7 @@ export default function ContactProfilePage({params}: {params: {id: string}}){
   const [properties,setProperties]=useState<OwnedProperty[]>([])
   const [history,setHistory]=useState<HistoryEntry[]>([])
   const [demandMatches,setDemandMatches]=useState<any[]>([])
+  const [interestedProperty,setInterestedProperty]=useState<any>(null)
 
   useEffect(()=>{
     if(!id) return
@@ -68,6 +70,15 @@ export default function ContactProfilePage({params}: {params: {id: string}}){
         .select('id,property_type,budget_eur,status').eq('contact_id', id)
       setDemandMatches(dp || [])
 
+      // Gmail-captured leads (contacts.type='lead') point at the specific
+      // listing they inquired about — see app/api/gmail-leads-sync. Not the
+      // same relationship as "owns" (properties above) or "wants" (demand).
+      if (c.interested_property_id) {
+        const { data: ip } = await supabase.from('meeting_properties')
+          .select('id,address,area,asking_price,status').eq('id', c.interested_property_id).maybeSingle()
+        setInterestedProperty(ip || null)
+      }
+
       setLoading(false)
     })()
   },[id])
@@ -86,6 +97,18 @@ export default function ContactProfilePage({params}: {params: {id: string}}){
     setSaving(false)
     if (error) { setErr(error.message); return }
     setSaved(true); setTimeout(()=>setSaved(false),3000)
+
+    // Fire-and-forget: a Gmail lead (contacts.type='lead') that just got a
+    // name/phone filled in pushes out to the agent's own Google Contacts
+    // (tagged KWAC), closing the loop the sync direction already covers.
+    // Never blocks the save — no connection configured/made is a normal,
+    // silent no-op here, not an error the agent needs to see on every save.
+    if (payload.full_name || payload.phone) {
+      authedFetch('/api/google-contacts/push-contact', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contact_id: id }),
+      }).catch(() => {})
+    }
   }
 
   const set = (k: string) => (v: any) => setContact((c: any) => ({ ...c, [k]: v }))
@@ -116,6 +139,23 @@ export default function ContactProfilePage({params}: {params: {id: string}}){
 
           <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24}}>
             <div>
+              {contact.type === 'lead' && (
+                <div style={{marginBottom:16,padding:'12px 14px',background:'#FFFBEB',border:'1px solid #FDE68A',borderRadius:10}}>
+                  <div style={{fontSize:11,fontWeight:700,color:'#92400E',textTransform:'uppercase',letterSpacing:.4,marginBottom:6}}>📩 Lead απο Gmail — συμπλήρωσε στοιχεία</div>
+                  {interestedProperty && (
+                    <a href={`/properties/${interestedProperty.id}`} style={{display:'block',fontSize:13,color:C.dark,textDecoration:'none',marginBottom:6}}>
+                      Ενδιαφέρεται για: <strong>{interestedProperty.address || 'Ακίνητο'}</strong>{interestedProperty.area && ` · ${interestedProperty.area}`} →
+                    </a>
+                  )}
+                  {contact.notes && <p style={{fontSize:12,color:'#78350F',margin:'0 0 6px',whiteSpace:'pre-line'}}>{contact.notes}</p>}
+                  {(contact.notes?.match(/https?:\/\/\S+/) || [])[0] && (
+                    <a href={(contact.notes.match(/https?:\/\/\S+/))[0]} target="_blank" rel="noopener noreferrer"
+                      style={{display:'inline-block',fontSize:12,fontWeight:600,color:'#92400E',background:'#FEF3C7',padding:'5px 10px',borderRadius:6,textDecoration:'none'}}>
+                      🔗 Άνοιγμα στοιχείων επικοινωνίας
+                    </a>
+                  )}
+                </div>
+              )}
               <Sec>Στοιχεία Επαφής</Sec>
               <Field label="Ονοματεπώνυμο" value={contactName(contact)} onChange={set('full_name')}/>
               <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
